@@ -206,7 +206,7 @@ public class CommonConfigurationKeys extends CommonConfigurationKeysPublic {
   public static final String
       HADOOP_SECURITY_SERVICE_AUTHORIZATION_RECONFIGURATION =
       "security.reconfiguration.protocol.acl";
-  public static final String 
+  public static final String
   SECURITY_HA_SERVICE_PROTOCOL_ACL = "security.ha.service.protocol.acl";
   public static final String 
   SECURITY_ZKFC_PROTOCOL_ACL = "security.zkfc.protocol.acl";

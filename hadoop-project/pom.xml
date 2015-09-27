@@ -899,14 +899,9 @@
         <version>0.1.42</version>
       </dependency>
       <dependency>
-        <groupId>org.htrace</groupId>
-        <artifactId>htrace-core</artifactId>
-        <version>3.0.4</version>
-      </dependency>
-      <dependency>
         <groupId>org.apache.htrace</groupId>
         <artifactId>htrace-core4</artifactId>
-        <version>4.1.0-incubating</version>
+        <version>4.0.1-incubating</version>
       </dependency>
       <dependency>
         <groupId>org.jdom</groupId>
@@ -1055,7 +1050,7 @@
        <version>1.46</version>
        <scope>test</scope>
      </dependency>
-      
+
      <dependency>
         <groupId>joda-time</groupId>
         <artifactId>joda-time</artifactId>
@@ -1109,7 +1104,7 @@
           <artifactId>mssql-jdbc</artifactId>
           <version>${mssql.version}</version>
         </dependency>
-      
+
     </dependencies>
   </dependencyManagement>
 

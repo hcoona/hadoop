@@ -396,6 +396,10 @@ class NameNodeRpcServer implements NamenodeProtocols {
         FSLimitException.PathComponentTooLongException.class,
         FSLimitException.MaxDirectoryItemsExceededException.class,
         UnresolvedPathException.class);
+    clientRpcServer.setTracer(nn.tracer);
+    if (serviceRpcServer != null) {
+      clientRpcServer.setTracer(nn.tracer);
+    }
  }
 
   /** Allow access to the client RPC server for testing */
@@ -1613,18 +1617,18 @@ class NameNodeRpcServer implements NamenodeProtocols {
   @Override
   public SpanReceiverInfo[] listSpanReceivers() throws IOException {
     namesystem.checkSuperuserPrivilege();
-    return nn.spanReceiverHost.listSpanReceivers();
+    return nn.tracerConfigurationManager.listSpanReceivers();
   }
 
   @Override
   public long addSpanReceiver(SpanReceiverInfo info) throws IOException {
     namesystem.checkSuperuserPrivilege();
-    return nn.spanReceiverHost.addSpanReceiver(info);
+    return nn.tracerConfigurationManager.addSpanReceiver(info);
   }
 
   @Override
   public void removeSpanReceiver(long id) throws IOException {
     namesystem.checkSuperuserPrivilege();
-    nn.spanReceiverHost.removeSpanReceiver(id);
+    nn.tracerConfigurationManager.removeSpanReceiver(id);
   }
 }

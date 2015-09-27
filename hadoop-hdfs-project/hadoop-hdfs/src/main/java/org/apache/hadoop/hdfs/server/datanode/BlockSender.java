@@ -45,6 +45,11 @@ import org.apache.hadoop.io.ReadaheadPool.ReadaheadRequest;
 import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.net.SocketOutputStream;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.htrace.core.Sampler;
+import org.apache.htrace.core.TraceScope;
+
+import static org.apache.hadoop.io.nativeio.NativeIO.POSIX.POSIX_FADV_DONTNEED;
+import static org.apache.hadoop.io.nativeio.NativeIO.POSIX.POSIX_FADV_SEQUENTIAL;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
@@ -680,6 +685,17 @@ class BlockSender implements java.io.Closeable {
    */
   long sendBlock(DataOutputStream out, OutputStream baseStream, 
                  DataTransferThrottler throttler) throws IOException {
+    TraceScope scope = datanode.tracer.
+        newScope("sendBlock_" + block.getBlockId());
+    try {
+      return doSendBlock(out, baseStream, throttler);
+    } finally {
+      scope.close();
+    }
+  }
+
+  private long doSendBlock(DataOutputStream out, OutputStream baseStream,
+        DataTransferThrottler throttler) throws IOException {
     if (out == null) {
       throw new IOException( "out stream is null" );
     }

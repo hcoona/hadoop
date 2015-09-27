@@ -60,12 +60,16 @@ import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.RefreshAuthorizationPolicyProtocol;
 import org.apache.hadoop.ipc.RefreshCallQueueProtocol;
 import org.apache.hadoop.tools.GetUserMappingsProtocol;
-import org.apache.hadoop.tracing.SpanReceiverHost;
 import org.apache.hadoop.tracing.TraceAdminProtocol;
+import org.apache.hadoop.tracing.TraceUtils;
+import org.apache.hadoop.tracing.TracerConfigurationManager;
 import org.apache.hadoop.util.ExitUtil.ExitException;
 import org.apache.hadoop.util.JvmPauseMonitor;
 import org.apache.hadoop.util.ServicePlugin;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.htrace.core.Tracer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.management.ObjectName;
 
@@ -78,6 +82,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY;
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_DEFAULT;
@@ -256,7 +261,12 @@ public class NameNode implements NameNodeStatusMXBean {
   public static final Log blockStateChangeLog = LogFactory.getLog("BlockStateChange");
   public static final HAState ACTIVE_STATE = new ActiveState();
   public static final HAState STANDBY_STATE = new StandbyState();
-  
+
+  private static final String NAMENODE_HTRACE_PREFIX = "namenode.htrace.";
+
+  public static final Log MetricsLog =
+      LogFactory.getLog("NameNodeMetricsLog");
+
   protected FSNamesystem namesystem; 
   protected final Configuration conf;
   protected final NamenodeRole role;
@@ -280,7 +290,10 @@ public class NameNode implements NameNodeStatusMXBean {
 
   private JvmPauseMonitor pauseMonitor;
   private ObjectName nameNodeStatusBeanName;
-  SpanReceiverHost spanReceiverHost;
+  protected final Tracer tracer;
+  protected final TracerConfigurationManager tracerConfigurationManager;
+  ScheduledThreadPoolExecutor metricsLoggerTimer;
+
   /**
    * The namenode address that clients will use to access this namenode
    * or the name service. For HA configurations using logical URI, it
@@ -381,7 +394,7 @@ public class NameNode implements NameNodeStatusMXBean {
   public static InetSocketAddress getAddress(String address) {
     return NetUtils.createSocketAddr(address, DEFAULT_PORT);
   }
-  
+
   /**
    * Set the configuration property for the service rpc address
    * to address
@@ -437,7 +450,7 @@ public class NameNode implements NameNodeStatusMXBean {
   public static URI getUri(InetSocketAddress namenode) {
     int port = namenode.getPort();
     String portString = port == DEFAULT_PORT ? "" : (":"+port);
-    return URI.create(HdfsConstants.HDFS_URI_SCHEME + "://" 
+    return URI.create(HdfsConstants.HDFS_URI_SCHEME + "://"
         + namenode.getHostName()+portString);
   }
 
@@ -589,8 +602,6 @@ public class NameNode implements NameNodeStatusMXBean {
     if (NamenodeRole.NAMENODE == role) {
       startHttpServer(conf);
     }
-
-    this.spanReceiverHost = SpanReceiverHost.getInstance(conf);
 
     loadNamesystem(conf);
 
@@ -746,8 +757,13 @@ public class NameNode implements NameNodeStatusMXBean {
     this(conf, NamenodeRole.NAMENODE);
   }
 
-  protected NameNode(Configuration conf, NamenodeRole role) 
-      throws IOException { 
+  protected NameNode(Configuration conf, NamenodeRole role)
+      throws IOException {
+    this.tracer = new Tracer.Builder("NameNode").
+        conf(TraceUtils.wrapHadoopConf(NAMENODE_HTRACE_PREFIX, conf)).
+        build();
+    this.tracerConfigurationManager =
+        new TracerConfigurationManager(NAMENODE_HTRACE_PREFIX, conf);
     this.conf = conf;
     this.role = role;
     setClientNamenodeAddress(conf);
@@ -828,10 +844,8 @@ public class NameNode implements NameNodeStatusMXBean {
         MBeans.unregister(nameNodeStatusBeanName);
         nameNodeStatusBeanName = null;
       }
-      if (this.spanReceiverHost != null) {
-        this.spanReceiverHost.closeReceivers();
-      }
     }
+    tracer.close();
   }
 
   synchronized boolean isStopRequested() {
@@ -1733,7 +1747,7 @@ public class NameNode implements NameNodeStatusMXBean {
   public boolean isActiveState() {
     return (state.equals(ACTIVE_STATE));
   }
-  
+
   /**
    * Check that a request to change this node's HA state is valid.
    * In particular, verifies that, if auto failover is enabled, non-forced

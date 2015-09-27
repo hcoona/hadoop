@@ -79,6 +79,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.management.ObjectName;
@@ -182,10 +183,13 @@ import org.apache.hadoop.security.UserGroupInformation.AuthenticationMethod;
 import org.apache.hadoop.security.authorize.AccessControlList;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.TokenIdentifier;
-import org.apache.hadoop.tracing.TraceAdminPB;
+import org.apache.hadoop.tracing.SpanReceiverInfo;
 import org.apache.hadoop.tracing.TraceAdminPB.TraceAdminService;
+import org.apache.hadoop.tracing.TraceAdminProtocol;
 import org.apache.hadoop.tracing.TraceAdminProtocolPB;
 import org.apache.hadoop.tracing.TraceAdminProtocolServerSideTranslatorPB;
+import org.apache.hadoop.tracing.TraceUtils;
+import org.apache.hadoop.tracing.TracerConfigurationManager;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.DiskChecker;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
@@ -195,9 +199,7 @@ import org.apache.hadoop.util.ServicePlugin;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Time;
 import org.apache.hadoop.util.VersionInfo;
-import org.apache.hadoop.tracing.SpanReceiverHost;
-import org.apache.hadoop.tracing.SpanReceiverInfo;
-import org.apache.hadoop.tracing.TraceAdminProtocol;
+import org.apache.htrace.core.Tracer;
 import org.mortbay.util.ajax.JSON;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -269,6 +271,15 @@ public class DataNode extends ReconfigurableBase
 
   static final int CURRENT_BLOCK_FORMAT_VERSION = 1;
 
+  /** A list of property that are reconfigurable at runtime. */
+  private static final List<String> RECONFIGURABLE_PROPERTIES =
+      Collections.unmodifiableList(
+          Arrays.asList(DFS_DATANODE_DATA_DIR_KEY));
+
+  public static final Log METRICS_LOG = LogFactory.getLog("DataNodeMetricsLog");
+
+  private static final String DATANODE_HTRACE_PREFIX = "datanode.htrace.";
+
   /**
    * Use {@link NetUtils#createSocketAddr(String)} instead.
    */
@@ -301,7 +312,7 @@ public class DataNode extends ReconfigurableBase
 
   DataNodeMetrics metrics;
   private InetSocketAddress streamingAddr;
-  
+
   private String hostName;
   private DatanodeID id;
   
@@ -344,7 +355,21 @@ public class DataNode extends ReconfigurableBase
   private boolean isPermissionEnabled;
   private String dnUserName = null;
 
-  private SpanReceiverHost spanReceiverHost;
+  final Tracer tracer;
+  private final TracerConfigurationManager tracerConfigurationManager;
+  private static final int NUM_CORES = Runtime.getRuntime()
+      .availableProcessors();
+  private static final double CONGESTION_RATIO = 1.5;
+
+  private static Tracer createTracer(Configuration conf) {
+    return new Tracer.Builder("DataNode").
+        conf(TraceUtils.wrapHadoopConf(DATANODE_HTRACE_PREFIX , conf)).
+        build();
+  }
+
+  private long[] oobTimeouts; /** timeout value of each OOB type */
+
+  private ScheduledThreadPoolExecutor metricsLoggerTimer;
 
   /**
    * Creates a dummy DataNode for testing purpose.
@@ -353,6 +378,9 @@ public class DataNode extends ReconfigurableBase
   @InterfaceAudience.LimitedPrivate("HDFS")
   DataNode(final Configuration conf) {
     super(conf);
+    this.tracer = createTracer(conf);
+    this.tracerConfigurationManager =
+        new TracerConfigurationManager(DATANODE_HTRACE_PREFIX, conf);
     this.fileDescriptorPassingDisabledReason = null;
     this.maxNumberOfBlocksToLog = 0;
     this.confVersion = null;
@@ -369,6 +397,10 @@ public class DataNode extends ReconfigurableBase
            final List<StorageLocation> dataDirs,
            final SecureResources resources) throws IOException {
     super(conf);
+    this.tracer = createTracer(conf);
+    this.tracerConfigurationManager =
+        new TracerConfigurationManager(DATANODE_HTRACE_PREFIX, conf);
+
     this.lastDiskErrorCheck = 0;
     this.maxNumberOfBlocksToLog = conf.getLong(DFS_MAX_NUM_BLOCKS_TO_LOG_KEY,
         DFS_MAX_NUM_BLOCKS_TO_LOG_DEFAULT);
@@ -649,10 +681,10 @@ public class DataNode extends ReconfigurableBase
     this.infoServer.addInternalServlet(null, "/streamFile/*", StreamFile.class);
     this.infoServer.addInternalServlet(null, "/getFileChecksum/*",
         FileChecksumServlets.GetServlet.class);
-    
+
     this.infoServer.setAttribute("datanode", this);
     this.infoServer.setAttribute(JspHelper.CURRENT_CONF, conf);
-    this.infoServer.addServlet(null, "/blockScannerReport", 
+    this.infoServer.addServlet(null, "/blockScannerReport",
                                DataBlockScanner.Servlet.class);
 
     if (WebHdfsFileSystem.isEnabled(conf, LOG)) {
@@ -755,27 +787,27 @@ public class DataNode extends ReconfigurableBase
     // Not a superuser.
     throw new AccessControlException();
   }
-  
+
 /**
  * Initialize the datanode's periodic scanners:
  *     {@link DataBlockScanner}
  *     {@link DirectoryScanner}
- * They report results on a per-blockpool basis but do their scanning 
+ * They report results on a per-blockpool basis but do their scanning
  * on a per-Volume basis to minimize competition for disk iops.
- * 
- * @param conf - Configuration has the run intervals and other 
+ *
+ * @param conf - Configuration has the run intervals and other
  *               parameters for these periodic scanners
  */
   private void initPeriodicScanners(Configuration conf) {
     initDataBlockScanner(conf);
     initDirectoryScanner(conf);
   }
-  
+
   private void shutdownPeriodicScanners() {
     shutdownDirectoryScanner();
     shutdownDataBlockScanner();
   }
-  
+
   /**
    * See {@link DataBlockScanner}
    */
@@ -790,7 +822,7 @@ public class DataNode extends ReconfigurableBase
       reason = "verification is turned off by configuration";
     } else if ("SimulatedFSDataset".equals(data.getClass().getSimpleName())) {
       reason = "verifcation is not supported by SimulatedFSDataset";
-    } 
+    }
     if (reason == null) {
       blockScanner = new DataBlockScanner(this, data, conf);
       blockScanner.start();
@@ -798,13 +830,13 @@ public class DataNode extends ReconfigurableBase
       LOG.info("Periodic Block Verification scan disabled because " + reason);
     }
   }
-  
+
   private void shutdownDataBlockScanner() {
     if (blockScanner != null) {
       blockScanner.shutdown();
     }
   }
-  
+
   /**
    * See {@link DirectoryScanner}
    */
@@ -993,7 +1025,7 @@ public class DataNode extends ReconfigurableBase
       boolean heartbeatsDisabledForTests) {
     this.heartbeatsDisabledForTests = heartbeatsDisabledForTests;
   }
-  
+
   boolean areHeartbeatsDisabledForTests() {
     return this.heartbeatsDisabledForTests;
   }
@@ -1021,8 +1053,6 @@ public class DataNode extends ReconfigurableBase
     this.conf = conf;
     this.dnConf = new DNConf(conf);
     checkSecureConfig(dnConf, conf, resources);
-
-    this.spanReceiverHost = SpanReceiverHost.getInstance(conf);
 
     if (dnConf.maxLockedMemory > 0) {
       if (!NativeIO.POSIX.getCacheManipulator().verifyCanMlock()) {
@@ -1280,7 +1310,7 @@ public class DataNode extends ReconfigurableBase
     checkDiskError();
 
     initPeriodicScanners(conf);
-    
+
     data.addBlockPool(nsInfo.getBlockPoolID(), conf);
   }
 
@@ -1587,8 +1617,8 @@ public class DataNode extends ReconfigurableBase
     }
     
     // We need to make a copy of the original blockPoolManager#offerServices to
-    // make sure blockPoolManager#shutDownAll() can still access all the 
-    // BPOfferServices, since after setting DataNode#shouldRun to false the 
+    // make sure blockPoolManager#shutDownAll() can still access all the
+    // BPOfferServices, since after setting DataNode#shouldRun to false the
     // offerServices may be modified.
     BPOfferService[] bposArray = this.blockPoolManager == null ? null
         : this.blockPoolManager.getAllNamenodeThreads();
@@ -1713,9 +1743,6 @@ public class DataNode extends ReconfigurableBase
       MBeans.unregister(dataNodeInfoBeanName);
       dataNodeInfoBeanName = null;
     }
-    if (this.spanReceiverHost != null) {
-      this.spanReceiverHost.closeReceivers();
-    }
     if (shortCircuitRegistry != null) shortCircuitRegistry.shutdown();
     LOG.info("Shutdown complete.");
     synchronized(this) {
@@ -1724,6 +1751,7 @@ public class DataNode extends ReconfigurableBase
       // Notify the main thread.
       notifyAll();
     }
+    tracer.close();
   }
   
   
@@ -1774,22 +1802,22 @@ public class DataNode extends ReconfigurableBase
   int getXmitsInProgress() {
     return xmitsInProgress.get();
   }
-    
+
   private void transferBlock(ExtendedBlock block, DatanodeInfo[] xferTargets,
       StorageType[] xferTargetStorageTypes) throws IOException {
     BPOfferService bpos = getBPOSForBlock(block);
     DatanodeRegistration bpReg = getDNRegistrationForBP(block.getBlockPoolId());
-    
+
     if (!data.isValidBlock(block)) {
       // block does not exist or is under-construction
       String errStr = "Can't send invalid block " + block;
       LOG.info(errStr);
-      
+
       bpos.trySendErrorReport(DatanodeProtocol.INVALID_BLOCK, errStr);
       return;
     }
 
-    // Check if NN recorded length matches on-disk length 
+    // Check if NN recorded length matches on-disk length
     long onDiskLength = data.getLength(block);
     if (block.getNumBytes() > onDiskLength) {
       FsVolumeSpi volume = getFSDataset().getVolume(block);
@@ -1797,7 +1825,7 @@ public class DataNode extends ReconfigurableBase
       bpos.reportBadBlocks(
           block, volume.getStorageID(), volume.getStorageType());
       LOG.warn("Can't replicate block " + block
-          + " because on-disk length " + onDiskLength 
+          + " because on-disk length " + onDiskLength
           + " is shorter than NameNode recorded length " + block.getNumBytes());
       return;
     }
@@ -2105,6 +2133,7 @@ public class DataNode extends ReconfigurableBase
     if (localDataXceiverServer != null) {
       localDataXceiverServer.start();
     }
+    ipcServer.setTracer(tracer);
     ipcServer.start();
     startPlugins(conf);
   }
@@ -2479,7 +2508,7 @@ public class DataNode extends ReconfigurableBase
       this.rInfo = rInfo;
     }
 
-    void updateReplicaUnderRecovery(String bpid, long recoveryId, long newLength 
+    void updateReplicaUnderRecovery(String bpid, long recoveryId, long newLength
         ) throws IOException {
       final ExtendedBlock b = new ExtendedBlock(bpid, rInfo);
       storageID = datanode.updateReplicaUnderRecovery(b, recoveryId, newLength);
@@ -2564,7 +2593,7 @@ public class DataNode extends ReconfigurableBase
     final String bpid = block.getBlockPoolId();
     DatanodeProtocolClientSideTranslatorPB nn =
       getActiveNamenodeForBP(block.getBlockPoolId());
-    
+
     long recoveryId = rBlock.getNewGenerationStamp();
     if (LOG.isDebugEnabled()) {
       LOG.debug("block=" + block + ", (length=" + block.getNumBytes()
@@ -3052,18 +3081,18 @@ public class DataNode extends ReconfigurableBase
   @Override
   public SpanReceiverInfo[] listSpanReceivers() throws IOException {
     checkSuperuserPrivilege();
-    return spanReceiverHost.listSpanReceivers();
+    return tracerConfigurationManager.listSpanReceivers();
   }
 
   @Override
   public long addSpanReceiver(SpanReceiverInfo info) throws IOException {
     checkSuperuserPrivilege();
-    return spanReceiverHost.addSpanReceiver(info);
+    return tracerConfigurationManager.addSpanReceiver(info);
   }
 
   @Override
   public void removeSpanReceiver(long id) throws IOException {
     checkSuperuserPrivilege();
-    spanReceiverHost.removeSpanReceiver(id);
+    tracerConfigurationManager.removeSpanReceiver(id);
   }
 }

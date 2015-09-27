@@ -176,6 +176,12 @@ public abstract class FileSystem extends Configured implements Closeable {
    */
   boolean resolveSymlinks;
 
+  private Tracer tracer;
+
+  protected final Tracer getTracer() {
+    return tracer;
+  }
+
   /**
    * This method adds a FileSystem instance to the cache so that it can
    * be retrieved later. It is only for testing.
@@ -3239,6 +3245,7 @@ public abstract class FileSystem extends Configured implements Closeable {
       scope.addKVAnnotation("scheme", uri.getScheme());
       Class<?> clazz = getFileSystemClass(uri.getScheme(), conf);
       FileSystem fs = (FileSystem)ReflectionUtils.newInstance(clazz, conf);
+      fs.tracer = tracer;
       fs.initialize(uri, conf);
       return fs;
     }

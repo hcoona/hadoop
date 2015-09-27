@@ -138,7 +138,7 @@ public class Client implements AutoCloseable {
   private final byte[] clientId;
   private final int maxAsyncCalls;
   private final AtomicInteger asyncCallCounter = new AtomicInteger(0);
-  
+
   final static int CONNECTION_CONTEXT_CALL_ID = -3;
 
   /**
@@ -683,7 +683,7 @@ public class Client implements AutoCloseable {
               }
             }
           }
-          
+
           NetUtils.connect(this.socket, server, bindAddr, connectionTimeout);
           this.socket.setSoTimeout(soTimeout);
           return;
@@ -1099,7 +1099,7 @@ public class Client implements AutoCloseable {
       // 1) RpcRequestHeader  - is serialized Delimited hence contains length
       // 2) RpcRequest
       //
-      // Items '1' and '2' are prepared here. 
+      // Items '1' and '2' are prepared here.
       RpcRequestHeaderProto header = ProtoUtil.makeRpcRequestHeader(
           call.rpcKind, OperationProto.RPC_FINAL_PACKET, call.id, call.retry,
           clientId);
@@ -1663,7 +1663,7 @@ public class Client implements AutoCloseable {
     String getSaslQop() {
       return saslQop;
     }
-    
+
     /**
      * Returns a ConnectionId object. 
      * @param addr Remote address for the connection.

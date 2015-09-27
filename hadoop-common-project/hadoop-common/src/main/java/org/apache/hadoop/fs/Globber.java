@@ -42,7 +42,7 @@ class Globber {
   private final Path pathPattern;
   private final PathFilter filter;
   private final Tracer tracer;
-  
+
   public Globber(FileSystem fs, Path pathPattern, PathFilter filter) {
     this.fs = fs;
     this.fc = null;

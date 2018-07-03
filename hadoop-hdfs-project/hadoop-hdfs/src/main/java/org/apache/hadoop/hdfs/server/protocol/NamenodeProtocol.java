@@ -208,6 +208,6 @@ public interface NamenodeProtocol {
    *         by External SPS.
    */
   @AtMostOnce
-  String getNextSPSPath() throws IOException;
+  Long getNextSPSPath() throws IOException;
 }
 

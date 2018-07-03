@@ -264,7 +264,7 @@ public class NamenodeProtocolServerSideTranslatorPB implements
       RpcController controller, GetNextSPSPathRequestProto request)
           throws ServiceException {
     try {
-      String nextSPSPath = impl.getNextSPSPath();
+      Long nextSPSPath = impl.getNextSPSPath();
       if (nextSPSPath == null) {
         return GetNextSPSPathResponseProto.newBuilder().build();
       }

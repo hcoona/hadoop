@@ -28,9 +28,12 @@ import javax.xml.bind.annotation.XmlRootElement;
 
 import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.NodeState;
+import org.apache.hadoop.yarn.server.api.records.OpportunisticContainersStatus;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNode;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerNodeReport;
+
+import com.google.common.annotations.VisibleForTesting;
 
 @XmlRootElement(name = "node")
 @XmlAccessorType(XmlAccessType.FIELD)
@@ -38,10 +41,10 @@ public class NodeInfo {
 
   protected String rack;
   protected NodeState state;
-  protected String id;
+  private String id;
   protected String nodeHostName;
   protected String nodeHTTPAddress;
-  protected long lastHealthUpdate;
+  private long lastHealthUpdate;
   protected String version;
   protected String healthReport;
   protected int numContainers;
@@ -49,7 +52,12 @@ public class NodeInfo {
   protected long availMemoryMB;
   protected long usedVirtualCores;
   protected long availableVirtualCores;
+  private int numRunningOpportContainers;
+  private long usedMemoryOpportGB;
+  private long usedVirtualCoresOpport;
+  private int numQueuedContainers;
   protected ArrayList<String> nodeLabels = new ArrayList<String>();
+  protected ResourceUtilizationInfo resourceUtilization;
 
   public NodeInfo() {
   } // JAXB needs this
@@ -62,10 +70,11 @@ public class NodeInfo {
     this.availMemoryMB = 0;
     if (report != null) {
       this.numContainers = report.getNumContainers();
-      this.usedMemoryMB = report.getUsedResource().getMemory();
-      this.availMemoryMB = report.getAvailableResource().getMemory();
+      this.usedMemoryMB = report.getUsedResource().getMemorySize();
+      this.availMemoryMB = report.getAvailableResource().getMemorySize();
       this.usedVirtualCores = report.getUsedResource().getVirtualCores();
-      this.availableVirtualCores = report.getAvailableResource().getVirtualCores();
+      this.availableVirtualCores =
+          report.getAvailableResource().getVirtualCores();
     }
     this.id = id.toString();
     this.rack = ni.getRackName();
@@ -75,13 +84,31 @@ public class NodeInfo {
     this.lastHealthUpdate = ni.getLastHealthReportTime();
     this.healthReport = String.valueOf(ni.getHealthReport());
     this.version = ni.getNodeManagerVersion();
-    
+
+    // Status of opportunistic containers.
+    this.numRunningOpportContainers = 0;
+    this.usedMemoryOpportGB = 0;
+    this.usedVirtualCoresOpport = 0;
+    this.numQueuedContainers = 0;
+    OpportunisticContainersStatus opportStatus =
+        ni.getOpportunisticContainersStatus();
+    if (opportStatus != null) {
+      this.numRunningOpportContainers =
+          opportStatus.getRunningOpportContainers();
+      this.usedMemoryOpportGB = opportStatus.getOpportMemoryUsed();
+      this.usedVirtualCoresOpport = opportStatus.getOpportCoresUsed();
+      this.numQueuedContainers = opportStatus.getQueuedOpportContainers();
+    }
+
     // add labels
     Set<String> labelSet = ni.getNodeLabels();
     if (labelSet != null) {
       nodeLabels.addAll(labelSet);
       Collections.sort(nodeLabels);
     }
+
+    // update node and containers resource utilization
+    this.resourceUtilization = new ResourceUtilizationInfo(ni);
   }
 
   public String getRack() {
@@ -136,7 +163,38 @@ public class NodeInfo {
     return this.availableVirtualCores;
   }
 
+  public int getNumRunningOpportContainers() {
+    return numRunningOpportContainers;
+  }
+
+  public long getUsedMemoryOpportGB() {
+    return usedMemoryOpportGB;
+  }
+
+  public long getUsedVirtualCoresOpport() {
+    return usedVirtualCoresOpport;
+  }
+
+  public int getNumQueuedContainers() {
+    return numQueuedContainers;
+  }
+
   public ArrayList<String> getNodeLabels() {
     return this.nodeLabels;
   }
+
+  public ResourceUtilizationInfo getResourceUtilization() {
+    return this.resourceUtilization;
+  }
+
+  @VisibleForTesting
+  public void setId(String id) {
+    this.id = id;
+  }
+
+  @VisibleForTesting
+  public void setLastHealthUpdate(long lastHealthUpdate) {
+    this.lastHealthUpdate = lastHealthUpdate;
+  }
+
 }

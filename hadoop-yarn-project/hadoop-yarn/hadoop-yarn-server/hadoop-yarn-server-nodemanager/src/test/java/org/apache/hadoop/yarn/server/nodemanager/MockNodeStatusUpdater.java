@@ -19,11 +19,11 @@
 package org.apache.hadoop.yarn.server.nodemanager;
 
 import java.io.IOException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.yarn.event.Dispatcher;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.factories.RecordFactory;
@@ -33,6 +33,8 @@ import org.apache.hadoop.yarn.server.api.protocolrecords.NodeHeartbeatRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.NodeHeartbeatResponse;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RegisterNodeManagerRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RegisterNodeManagerResponse;
+import org.apache.hadoop.yarn.server.api.protocolrecords.UnRegisterNodeManagerRequest;
+import org.apache.hadoop.yarn.server.api.protocolrecords.UnRegisterNodeManagerResponse;
 import org.apache.hadoop.yarn.server.api.records.MasterKey;
 import org.apache.hadoop.yarn.server.api.records.NodeStatus;
 import org.apache.hadoop.yarn.server.api.records.impl.pb.MasterKeyPBImpl;
@@ -44,7 +46,8 @@ import org.apache.hadoop.yarn.server.utils.YarnServerBuilderUtils;
  * real RM.
  */
 public class MockNodeStatusUpdater extends NodeStatusUpdaterImpl {
-  static final Log LOG = LogFactory.getLog(MockNodeStatusUpdater.class);
+  static final Logger LOG =
+       LoggerFactory.getLogger(MockNodeStatusUpdater.class);
   
   private static final RecordFactory recordFactory = RecordFactoryProvider
       .getRecordFactory(null);
@@ -99,6 +102,13 @@ public class MockNodeStatusUpdater extends NodeStatusUpdaterImpl {
           .newNodeHeartbeatResponse(heartBeatID, null, null,
               null, null, null, 1000L);
       return nhResponse;
+    }
+
+    @Override
+    public UnRegisterNodeManagerResponse unRegisterNodeManager(
+        UnRegisterNodeManagerRequest request) throws YarnException, IOException {
+      return recordFactory
+          .newRecordInstance(UnRegisterNodeManagerResponse.class);
     }
   }
 }

@@ -19,19 +19,26 @@
 package org.apache.hadoop.yarn.server.nodemanager;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.Credentials;
-import org.apache.hadoop.yarn.api.ContainerManagementProtocol;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.NodeId;
+import org.apache.hadoop.yarn.server.api.protocolrecords.LogAggregationReport;
+import org.apache.hadoop.yarn.server.api.records.AppCollectorData;
 import org.apache.hadoop.yarn.server.api.records.NodeHealthStatus;
+import org.apache.hadoop.yarn.server.nodemanager.containermanager.ContainerManager;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.application.Application;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.container.Container;
+
 import org.apache.hadoop.yarn.server.nodemanager.recovery.NMStateStoreService;
+import org.apache.hadoop.yarn.server.scheduler.OpportunisticContainerAllocator;
 import org.apache.hadoop.yarn.server.nodemanager.security.NMContainerTokenSecretManager;
 import org.apache.hadoop.yarn.server.nodemanager.security.NMTokenSecretManagerInNM;
+import org.apache.hadoop.yarn.server.nodemanager.timelineservice.NMTimelinePublisher;
 import org.apache.hadoop.yarn.server.security.ApplicationACLsManager;
 
 /**
@@ -58,7 +65,24 @@ public interface Context {
 
   Map<ApplicationId, Credentials> getSystemCredentialsForApps();
 
+  /**
+   * Get the list of collectors that are registering with the RM from this node.
+   * @return registering collectors, or null if the timeline service v.2 is not
+   * enabled
+   */
+  ConcurrentMap<ApplicationId, AppCollectorData> getRegisteringCollectors();
+
+  /**
+   * Get the list of collectors registered with the RM and known by this node.
+   * @return known collectors, or null if the timeline service v.2 is not
+   * enabled.
+   */
+  ConcurrentMap<ApplicationId, AppCollectorData> getKnownCollectors();
+
   ConcurrentMap<ContainerId, Container> getContainers();
+
+  ConcurrentMap<ContainerId, org.apache.hadoop.yarn.api.records.Container>
+      getIncreasedContainers();
 
   NMContainerTokenSecretManager getContainerTokenSecretManager();
   
@@ -66,7 +90,9 @@ public interface Context {
 
   NodeHealthStatus getNodeHealthStatus();
 
-  ContainerManagementProtocol getContainerManager();
+  ContainerManager getContainerManager();
+
+  NodeResourceMonitor getNodeResourceMonitor();
 
   LocalDirsHandlerService getLocalDirsHandler();
 
@@ -76,5 +102,24 @@ public interface Context {
 
   boolean getDecommissioned();
 
+  Configuration getConf();
+
   void setDecommissioned(boolean isDecommissioned);
+
+  ConcurrentLinkedQueue<LogAggregationReport>
+      getLogAggregationStatusForApps();
+
+  NodeStatusUpdater getNodeStatusUpdater();
+
+  boolean isDistributedSchedulingEnabled();
+
+  OpportunisticContainerAllocator getContainerAllocator();
+
+  ContainerExecutor getContainerExecutor();
+
+  ContainerStateTransitionListener getContainerStateTransitionListener();
+
+  void setNMTimelinePublisher(NMTimelinePublisher nmMetricsPublisher);
+
+  NMTimelinePublisher getNMTimelinePublisher();
 }

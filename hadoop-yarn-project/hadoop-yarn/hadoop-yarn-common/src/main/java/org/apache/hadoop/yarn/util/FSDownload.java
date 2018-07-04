@@ -32,6 +32,7 @@ import org.apache.commons.io.FileUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience.LimitedPrivate;
+import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileContext;
 import org.apache.hadoop.fs.FileStatus;
@@ -45,6 +46,7 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.RunJar;
 import org.apache.hadoop.util.Shell;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.yarn.api.records.LocalResource;
 import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
 
@@ -134,8 +136,8 @@ public class FSDownload implements Callable<Path> {
    * @return true if the path in the current path is visible to all, false
    * otherwise
    */
-  @VisibleForTesting
-  static boolean isPublic(FileSystem fs, Path current, FileStatus sStat,
+  @Private
+  public static boolean isPublic(FileSystem fs, Path current, FileStatus sStat,
       LoadingCache<Path,Future<FileStatus>> statCache) throws IOException {
     current = fs.makeQualified(current);
     //the leaf level file should be readable by others
@@ -257,7 +259,7 @@ public class FSDownload implements Callable<Path> {
     if (resource.getVisibility() == LocalResourceVisibility.PUBLIC) {
       if (!isPublic(sourceFs, sCopy, sStat, statCache)) {
         throw new IOException("Resource " + sCopy +
-            " is not publicly accessable and as such cannot be part of the" +
+            " is not publicly accessible and as such cannot be part of the" +
             " public cache.");
       }
     }
@@ -270,7 +272,7 @@ public class FSDownload implements Callable<Path> {
   private long unpack(File localrsrc, File dst) throws IOException {
     switch (resource.getType()) {
     case ARCHIVE: {
-      String lowerDst = dst.getName().toLowerCase();
+      String lowerDst = StringUtils.toLowerCase(dst.getName());
       if (lowerDst.endsWith(".jar")) {
         RunJar.unJar(localrsrc, dst);
       } else if (lowerDst.endsWith(".zip")) {
@@ -289,7 +291,7 @@ public class FSDownload implements Callable<Path> {
     }
     break;
     case PATTERN: {
-      String lowerDst = dst.getName().toLowerCase();
+      String lowerDst = StringUtils.toLowerCase(dst.getName());
       if (lowerDst.endsWith(".jar")) {
         String p = resource.getPattern();
         RunJar.unJar(localrsrc, dst,
@@ -344,10 +346,15 @@ public class FSDownload implements Callable<Path> {
   public Path call() throws Exception {
     final Path sCopy;
     try {
-      sCopy = ConverterUtils.getPathFromYarnURL(resource.getResource());
+      sCopy = resource.getResource().toPath();
     } catch (URISyntaxException e) {
       throw new IOException("Invalid resource", e);
     }
+
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Starting to download " + sCopy);
+    }
+
     createDir(destDirPath, cachePerms);
     final Path dst_work = new Path(destDirPath + "_tmp");
     createDir(dst_work, cachePerms);
@@ -362,6 +369,11 @@ public class FSDownload implements Callable<Path> {
       unpack(new File(dTmp.toUri()), new File(dFinal.toUri()));
       changePermissions(dFinal.getFileSystem(conf), dFinal);
       files.rename(dst_work, destDirPath, Rename.OVERWRITE);
+
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("File has been downloaded to " +
+            new Path(destDirPath, sCopy.getName()));
+      }
     } catch (Exception e) {
       try {
         files.delete(destDirPath, true);
@@ -407,8 +419,11 @@ public class FSDownload implements Callable<Path> {
       // APPLICATION:
       perm = isDir ? PRIVATE_DIR_PERMS : PRIVATE_FILE_PERMS;
     }
-    LOG.debug("Changing permissions for path " + path
-        + " to perm " + perm);
+
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Changing permissions for path " + path + " to perm " + perm);
+    }
+
     final FsPermission fPerm = perm;
     if (null == userUgi) {
       files.setPermission(path, perm);

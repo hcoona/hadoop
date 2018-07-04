@@ -23,6 +23,7 @@ import java.util.List;
 
 import org.junit.Assert;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.yarn.api.protocolrecords.AllocateRequest;
@@ -30,9 +31,6 @@ import org.apache.hadoop.yarn.api.protocolrecords.AllocateResponse;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.NodeReport;
 import org.apache.hadoop.yarn.api.records.NodeState;
-import org.apache.hadoop.yarn.event.Dispatcher;
-import org.apache.hadoop.yarn.event.DrainDispatcher;
-import org.apache.hadoop.yarn.event.EventHandler;
 import org.apache.hadoop.yarn.security.AMRMTokenIdentifier;
 import org.apache.hadoop.yarn.server.resourcemanager.ApplicationMasterService;
 import org.apache.hadoop.yarn.server.resourcemanager.MockAM;
@@ -40,35 +38,27 @@ import org.apache.hadoop.yarn.server.resourcemanager.MockNM;
 import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttempt;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.event.SchedulerEvent;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 public class TestAMRMRPCNodeUpdates {
   private MockRM rm;
-  ApplicationMasterService amService = null;
-  DrainDispatcher dispatcher = null;
+  private ApplicationMasterService amService;
 
   @Before
   public void setUp() {
-    dispatcher = new DrainDispatcher();
     this.rm = new MockRM() {
       @Override
-      protected EventHandler<SchedulerEvent> createSchedulerEventDispatcher() {
-        return new SchedulerEventDispatcher(this.scheduler) {
-          @Override
-          public void handle(SchedulerEvent event) {
-            scheduler.handle(event);
-          }
-        };
-      }
-
-      @Override
-      protected Dispatcher createDispatcher() {
-        return dispatcher;
+      public void init(Configuration conf) {
+        conf.set(
+          CapacitySchedulerConfiguration.MAXIMUM_APPLICATION_MASTERS_RESOURCE_PERCENT,
+          "1.0");
+        super.init(conf);
       }
     };
+
     rm.start();
     amService = rm.getApplicationMasterService();
   }
@@ -82,14 +72,14 @@ public class TestAMRMRPCNodeUpdates {
   
   private void syncNodeHeartbeat(MockNM nm, boolean health) throws Exception {
     nm.nodeHeartbeat(health);
-    dispatcher.await();
+    rm.drainEvents();
   }
   
   private void syncNodeLost(MockNM nm) throws Exception {
     rm.sendNodeStarted(nm);
-    rm.NMwaitForState(nm.getNodeId(), NodeState.RUNNING);
+    rm.waitForState(nm.getNodeId(), NodeState.RUNNING);
     rm.sendNodeLost(nm);
-    dispatcher.await();
+    rm.drainEvents();
   }
 
   private AllocateResponse allocate(final ApplicationAttemptId attemptId,
@@ -115,7 +105,7 @@ public class TestAMRMRPCNodeUpdates {
     MockNM nm2 = rm.registerNode("127.0.0.2:1234", 10000);
     MockNM nm3 = rm.registerNode("127.0.0.3:1234", 10000);
     MockNM nm4 = rm.registerNode("127.0.0.4:1234", 10000);
-    dispatcher.await();
+    rm.drainEvents();
 
     RMApp app1 = rm.submitApp(2000);
 

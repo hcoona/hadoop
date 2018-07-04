@@ -31,23 +31,24 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.util.ControlledClock;
+import org.apache.hadoop.yarn.util.resource.DefaultResourceCalculator;
 import org.junit.Before;
 import org.junit.Test;
 
 public class TestMaxRunningAppsEnforcer {
   private QueueManager queueManager;
-  private Map<String, Integer> queueMaxApps;
   private Map<String, Integer> userMaxApps;
   private MaxRunningAppsEnforcer maxAppsEnforcer;
   private int appNum;
-  private TestFairScheduler.MockClock clock;
+  private ControlledClock clock;
   private RMContext rmContext;
   private FairScheduler scheduler;
   
   @Before
   public void setup() throws Exception {
     Configuration conf = new Configuration();
-    clock = new TestFairScheduler.MockClock();
+    clock = new ControlledClock();
     scheduler = mock(FairScheduler.class);
     when(scheduler.getConf()).thenReturn(
         new FairSchedulerConfiguration(conf));
@@ -55,10 +56,11 @@ public class TestMaxRunningAppsEnforcer {
     AllocationConfiguration allocConf = new AllocationConfiguration(
         conf);
     when(scheduler.getAllocationConfiguration()).thenReturn(allocConf);
-    
+    when(scheduler.getResourceCalculator()).thenReturn(
+        new DefaultResourceCalculator());
+
     queueManager = new QueueManager(scheduler);
     queueManager.initialize(conf);
-    queueMaxApps = allocConf.queueMaxApps;
     userMaxApps = allocConf.userMaxApps;
     maxAppsEnforcer = new MaxRunningAppsEnforcer(scheduler);
     appNum = 0;
@@ -69,9 +71,9 @@ public class TestMaxRunningAppsEnforcer {
   private FSAppAttempt addApp(FSLeafQueue queue, String user) {
     ApplicationId appId = ApplicationId.newInstance(0l, appNum++);
     ApplicationAttemptId attId = ApplicationAttemptId.newInstance(appId, 0);
-    boolean runnable = maxAppsEnforcer.canAppBeRunnable(queue, user);
     FSAppAttempt app = new FSAppAttempt(scheduler, attId, user, queue, null,
         rmContext);
+    boolean runnable = maxAppsEnforcer.canAppBeRunnable(queue, app);
     queue.addApp(app, runnable);
     if (runnable) {
       maxAppsEnforcer.trackRunnableApp(app);
@@ -89,96 +91,100 @@ public class TestMaxRunningAppsEnforcer {
   
   @Test
   public void testRemoveDoesNotEnableAnyApp() {
+    FSParentQueue root = queueManager.getRootQueue();
     FSLeafQueue leaf1 = queueManager.getLeafQueue("root.queue1", true);
     FSLeafQueue leaf2 = queueManager.getLeafQueue("root.queue2", true);
-    queueMaxApps.put("root", 2);
-    queueMaxApps.put("root.queue1", 1);
-    queueMaxApps.put("root.queue2", 1);
+    root.setMaxRunningApps(2);
+    leaf1.setMaxRunningApps(1);
+    leaf2.setMaxRunningApps(1);
     FSAppAttempt app1 = addApp(leaf1, "user");
     addApp(leaf2, "user");
     addApp(leaf2, "user");
-    assertEquals(1, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(1, leaf1.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumNonRunnableApps());
     removeApp(app1);
-    assertEquals(0, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(0, leaf1.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumNonRunnableApps());
   }
   
   @Test
   public void testRemoveEnablesAppOnCousinQueue() {
     FSLeafQueue leaf1 = queueManager.getLeafQueue("root.queue1.subqueue1.leaf1", true);
     FSLeafQueue leaf2 = queueManager.getLeafQueue("root.queue1.subqueue2.leaf2", true);
-    queueMaxApps.put("root.queue1", 2);
+    FSParentQueue queue1 = queueManager.getParentQueue("root.queue1", true);
+    queue1.setMaxRunningApps(2);
     FSAppAttempt app1 = addApp(leaf1, "user");
     addApp(leaf2, "user");
     addApp(leaf2, "user");
-    assertEquals(1, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(1, leaf1.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumNonRunnableApps());
     removeApp(app1);
-    assertEquals(0, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(2, leaf2.getRunnableAppSchedulables().size());
-    assertEquals(0, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(0, leaf1.getNumRunnableApps());
+    assertEquals(2, leaf2.getNumRunnableApps());
+    assertEquals(0, leaf2.getNumNonRunnableApps());
   }
   
   @Test
   public void testRemoveEnablesOneByQueueOneByUser() {
     FSLeafQueue leaf1 = queueManager.getLeafQueue("root.queue1.leaf1", true);
     FSLeafQueue leaf2 = queueManager.getLeafQueue("root.queue1.leaf2", true);
-    queueMaxApps.put("root.queue1.leaf1", 2);
+    leaf1.setMaxRunningApps(2);
     userMaxApps.put("user1", 1);
     FSAppAttempt app1 = addApp(leaf1, "user1");
     addApp(leaf1, "user2");
     addApp(leaf1, "user3");
     addApp(leaf2, "user1");
-    assertEquals(2, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf1.getNonRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(2, leaf1.getNumRunnableApps());
+    assertEquals(1, leaf1.getNumNonRunnableApps());
+    assertEquals(1, leaf2.getNumNonRunnableApps());
     removeApp(app1);
-    assertEquals(2, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getRunnableAppSchedulables().size());
-    assertEquals(0, leaf1.getNonRunnableAppSchedulables().size());
-    assertEquals(0, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(2, leaf1.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumRunnableApps());
+    assertEquals(0, leaf1.getNumNonRunnableApps());
+    assertEquals(0, leaf2.getNumNonRunnableApps());
   }
   
   @Test
   public void testRemoveEnablingOrderedByStartTime() {
     FSLeafQueue leaf1 = queueManager.getLeafQueue("root.queue1.subqueue1.leaf1", true);
     FSLeafQueue leaf2 = queueManager.getLeafQueue("root.queue1.subqueue2.leaf2", true);
-    queueMaxApps.put("root.queue1", 2);
+    FSParentQueue queue1 = queueManager.getParentQueue("root.queue1", true);
+    queue1.setMaxRunningApps(2);
     FSAppAttempt app1 = addApp(leaf1, "user");
     addApp(leaf2, "user");
     addApp(leaf2, "user");
-    clock.tick(20);
+    clock.tickSec(20);
     addApp(leaf1, "user");
-    assertEquals(1, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf1.getNonRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(1, leaf1.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumRunnableApps());
+    assertEquals(1, leaf1.getNumNonRunnableApps());
+    assertEquals(1, leaf2.getNumNonRunnableApps());
     removeApp(app1);
-    assertEquals(0, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(2, leaf2.getRunnableAppSchedulables().size());
-    assertEquals(0, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(0, leaf1.getNumRunnableApps());
+    assertEquals(2, leaf2.getNumRunnableApps());
+    assertEquals(0, leaf2.getNumNonRunnableApps());
   }
   
   @Test
   public void testMultipleAppsWaitingOnCousinQueue() {
     FSLeafQueue leaf1 = queueManager.getLeafQueue("root.queue1.subqueue1.leaf1", true);
     FSLeafQueue leaf2 = queueManager.getLeafQueue("root.queue1.subqueue2.leaf2", true);
-    queueMaxApps.put("root.queue1", 2);
+    FSParentQueue queue1 = queueManager.getParentQueue("root.queue1", true);
+    queue1.setMaxRunningApps(2);
     FSAppAttempt app1 = addApp(leaf1, "user");
     addApp(leaf2, "user");
     addApp(leaf2, "user");
     addApp(leaf2, "user");
-    assertEquals(1, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getRunnableAppSchedulables().size());
-    assertEquals(2, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(1, leaf1.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumRunnableApps());
+    assertEquals(2, leaf2.getNumNonRunnableApps());
     removeApp(app1);
-    assertEquals(0, leaf1.getRunnableAppSchedulables().size());
-    assertEquals(2, leaf2.getRunnableAppSchedulables().size());
-    assertEquals(1, leaf2.getNonRunnableAppSchedulables().size());
+    assertEquals(0, leaf1.getNumRunnableApps());
+    assertEquals(2, leaf2.getNumRunnableApps());
+    assertEquals(1, leaf2.getNumNonRunnableApps());
   }
   
   @Test

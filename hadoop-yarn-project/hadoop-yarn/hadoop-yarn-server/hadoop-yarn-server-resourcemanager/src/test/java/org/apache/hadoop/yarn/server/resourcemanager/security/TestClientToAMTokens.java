@@ -33,7 +33,6 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.security.PrivilegedAction;
 import java.security.PrivilegedExceptionAction;
-import java.util.Arrays;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -43,7 +42,6 @@ import org.junit.Assert;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
-import org.apache.hadoop.io.DataInputBuffer;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.ipc.Server;
@@ -65,8 +63,6 @@ import org.apache.hadoop.yarn.api.protocolrecords.StartContainersRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.StartContainersResponse;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationReport;
-import org.apache.hadoop.yarn.event.Dispatcher;
-import org.apache.hadoop.yarn.event.DrainDispatcher;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
 import org.apache.hadoop.yarn.security.client.ClientToAMTokenIdentifier;
@@ -86,7 +82,7 @@ import org.junit.Test;
 public class TestClientToAMTokens extends ParameterizedSchedulerTestBase {
   private YarnConfiguration conf;
 
-  public TestClientToAMTokens(SchedulerType type) {
+  public TestClientToAMTokens(SchedulerType type) throws IOException {
     super(type);
   }
 
@@ -189,7 +185,6 @@ public class TestClientToAMTokens extends ParameterizedSchedulerTestBase {
     StartContainersResponse mockResponse = mock(StartContainersResponse.class);
     when(containerManager.startContainers((StartContainersRequest) any()))
       .thenReturn(mockResponse);
-    final DrainDispatcher dispatcher = new DrainDispatcher();
 
     MockRM rm = new MockRMWithCustomAMLauncher(conf, containerManager) {
       protected ClientRMService createClientRMService() {
@@ -197,11 +192,6 @@ public class TestClientToAMTokens extends ParameterizedSchedulerTestBase {
           this.rmAppManager, this.applicationACLsManager, this.queueACLsManager,
           getRMContext().getRMDelegationTokenSecretManager());
       };
-
-      @Override
-      protected Dispatcher createDispatcher() {
-        return dispatcher;
-      }
 
       @Override
       protected void doSecureLogin() throws IOException {
@@ -215,11 +205,10 @@ public class TestClientToAMTokens extends ParameterizedSchedulerTestBase {
     // Set up a node.
     MockNM nm1 = rm.registerNode("localhost:1234", 3072);
     nm1.nodeHeartbeat(true);
-    dispatcher.await();
+    rm.drainEvents();
     
-
     nm1.nodeHeartbeat(true);
-    dispatcher.await();
+    rm.drainEvents();
 
     ApplicationAttemptId appAttempt = app.getCurrentAppAttempt().getAppAttemptId();
     final MockAM mockAM =
@@ -421,7 +410,6 @@ public class TestClientToAMTokens extends ParameterizedSchedulerTestBase {
   @Test(timeout=20000)
   public void testClientTokenRace() throws Exception {
 
-    final Configuration conf = new Configuration();
     conf.set(CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHENTICATION,
       "kerberos");
     UserGroupInformation.setConfiguration(conf);
@@ -431,7 +419,6 @@ public class TestClientToAMTokens extends ParameterizedSchedulerTestBase {
     StartContainersResponse mockResponse = mock(StartContainersResponse.class);
     when(containerManager.startContainers((StartContainersRequest) any()))
       .thenReturn(mockResponse);
-    final DrainDispatcher dispatcher = new DrainDispatcher();
 
     MockRM rm = new MockRMWithCustomAMLauncher(conf, containerManager) {
       protected ClientRMService createClientRMService() {
@@ -439,11 +426,6 @@ public class TestClientToAMTokens extends ParameterizedSchedulerTestBase {
           this.rmAppManager, this.applicationACLsManager, this.queueACLsManager,
           getRMContext().getRMDelegationTokenSecretManager());
       };
-
-      @Override
-      protected Dispatcher createDispatcher() {
-        return dispatcher;
-      }
 
       @Override
       protected void doSecureLogin() throws IOException {
@@ -457,10 +439,10 @@ public class TestClientToAMTokens extends ParameterizedSchedulerTestBase {
     // Set up a node.
     MockNM nm1 = rm.registerNode("localhost:1234", 3072);
     nm1.nodeHeartbeat(true);
-    dispatcher.await();
+    rm.drainEvents();
 
     nm1.nodeHeartbeat(true);
-    dispatcher.await();
+    rm.drainEvents();
 
     ApplicationAttemptId appAttempt = app.getCurrentAppAttempt().getAppAttemptId();
     final MockAM mockAM =

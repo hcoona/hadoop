@@ -19,6 +19,8 @@
 package org.apache.hadoop.yarn.server.resourcemanager.reservation;
 
 import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.server.resourcemanager.reservation.planning.Planner;
+import org.apache.hadoop.yarn.server.resourcemanager.reservation.planning.ReservationAgent;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
 import org.apache.hadoop.yarn.util.resource.ResourceCalculator;
@@ -87,6 +89,17 @@ public interface PlanContext {
    *         in this plan
    */
   public Resource getMaximumAllocation();
+
+  /**
+   * Returns the maximum periodicity allowed in a recurrence expression
+   * for reservations of a particular plan. This value must be divisible by
+   * the recurrence expression of a newly submitted reservation. Otherwise, the
+   * reservation submission will fail.
+   *
+   * @return the maximum periodicity allowed in a recurrence expression for
+   * reservations of a particular plan.
+   */
+  long getMaximumPeriodicity();
 
   /**
    * Return the name of the queue in the {@link ResourceScheduler} corresponding

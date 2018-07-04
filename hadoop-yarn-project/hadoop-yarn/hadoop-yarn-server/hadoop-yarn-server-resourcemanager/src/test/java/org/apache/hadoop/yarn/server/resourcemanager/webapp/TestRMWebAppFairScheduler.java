@@ -22,11 +22,13 @@ import com.google.common.collect.Maps;
 import com.google.inject.Binder;
 import com.google.inject.Injector;
 import com.google.inject.Module;
+
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
+import org.apache.hadoop.yarn.server.resourcemanager.ClientRMService;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContextImpl;
 import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager;
@@ -35,8 +37,8 @@ import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppState;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttempt;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.AbstractYarnScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
-
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FSAppAttempt;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairSchedulerConfiguration;
@@ -72,7 +74,6 @@ public class TestRMWebAppFairScheduler {
                   mockRm(rmContext);
               binder.bind(ResourceManager.class).toInstance
                   (mockRmWithFairScheduler);
-
             } catch (IOException e) {
               throw new IllegalStateException(e);
             }
@@ -111,7 +112,6 @@ public class TestRMWebAppFairScheduler {
                   mockRmWithApps(rmContext);
               binder.bind(ResourceManager.class).toInstance
                   (mockRmWithFairScheduler);
-
             } catch (IOException e) {
               throw new IllegalStateException(e);
             }
@@ -136,7 +136,8 @@ public class TestRMWebAppFairScheduler {
       MockRMApp app = new MockRMApp(i, i, state) {
         @Override
         public RMAppMetrics getRMAppMetrics() {
-          return new RMAppMetrics(Resource.newInstance(0, 0), 0, 0, 0, 0);
+          return new RMAppMetrics(Resource.newInstance(0, 0),
+              0, 0, 0, 0, 0, 0);
         }
         @Override
         public YarnApplicationState createApplicationState() {
@@ -149,21 +150,28 @@ public class TestRMWebAppFairScheduler {
       i++;
     }
 
-    return new RMContextImpl(null, null, null, null,
+    RMContextImpl rmContext =  new RMContextImpl(null, null, null, null,
         null, null, null, null, null, null) {
       @Override
       public ConcurrentMap<ApplicationId, RMApp> getRMApps() {
         return applicationsMaps;
       }
+      @Override
+      public ResourceScheduler getScheduler() {
+        return mock(AbstractYarnScheduler.class);
+      }
     };
+    return rmContext;
   }
 
   private static ResourceManager mockRm(RMContext rmContext) throws
       IOException {
     ResourceManager rm = mock(ResourceManager.class);
     ResourceScheduler rs = mockFairScheduler();
+    ClientRMService clientRMService = mockClientRMService(rmContext);
     when(rm.getResourceScheduler()).thenReturn(rs);
     when(rm.getRMContext()).thenReturn(rmContext);
+    when(rm.getClientRMService()).thenReturn(clientRMService);
     return rm;
   }
 
@@ -182,8 +190,10 @@ public class TestRMWebAppFairScheduler {
       IOException {
     ResourceManager rm = mock(ResourceManager.class);
     ResourceScheduler rs =  mockFairSchedulerWithoutApps(rmContext);
+    ClientRMService clientRMService = mockClientRMService(rmContext);
     when(rm.getResourceScheduler()).thenReturn(rs);
     when(rm.getRMContext()).thenReturn(rmContext);
+    when(rm.getClientRMService()).thenReturn(clientRMService);
     return rm;
   }
 
@@ -207,4 +217,7 @@ public class TestRMWebAppFairScheduler {
     return fs;
   }
 
+  public static ClientRMService mockClientRMService(RMContext rmContext) {
+    return mock(ClientRMService.class);
+  }
 }

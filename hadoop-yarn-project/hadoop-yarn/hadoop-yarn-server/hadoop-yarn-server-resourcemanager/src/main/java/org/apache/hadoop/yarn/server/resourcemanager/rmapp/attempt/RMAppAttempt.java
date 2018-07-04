@@ -19,6 +19,7 @@
 package org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt;
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 
 import javax.crypto.SecretKey;
@@ -38,6 +39,7 @@ import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.event.EventHandler;
 import org.apache.hadoop.yarn.security.AMRMTokenIdentifier;
 import org.apache.hadoop.yarn.security.client.ClientToAMTokenIdentifier;
+import org.apache.hadoop.yarn.server.resourcemanager.blacklist.BlacklistManager;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 
 /**
@@ -185,6 +187,12 @@ public interface RMAppAttempt extends EventHandler<RMAppAttemptEvent> {
   ApplicationResourceUsageReport getApplicationResourceUsageReport();
 
   /**
+   * Get the {@link BlacklistManager} that manages blacklists for AM failures
+   * @return the {@link BlacklistManager} that tracks AM failures.
+   */
+  BlacklistManager getAMBlacklistManager();
+
+  /**
    * the start time of the application.
    * @return the start time of the application.
    */
@@ -216,11 +224,14 @@ public interface RMAppAttempt extends EventHandler<RMAppAttemptEvent> {
   /**
    * Return the flag which indicates whether the attempt failure should be
    * counted to attempt retry count.
-   * <ul>
+   * <p>
    * There failure types should not be counted to attempt retry count:
-   * <li>preempted by the scheduler.</li>
-   * <li>hardware failures, such as NM failing, lost NM and NM disk errors.</li>
-   * <li>killed by RM because of RM restart or failover.</li>
+   * <ul>
+   *   <li>preempted by the scheduler.</li>
+   *   <li>
+   *     hardware failures, such as NM failing, lost NM and NM disk errors.
+   *   </li>
+   *   <li>killed by RM because of RM restart or failover.</li>
    * </ul>
    */
   boolean shouldCountTowardsMaxAttemptRetry();
@@ -236,4 +247,15 @@ public interface RMAppAttempt extends EventHandler<RMAppAttemptEvent> {
    * @return the finish time of the application attempt.
    */
   long getFinishTime();
+
+  /**
+   * To capture Launch diagnostics of the app.
+   * @param amLaunchDiagnostics
+   */
+  void updateAMLaunchDiagnostics(String amLaunchDiagnostics);
+
+  /**
+   * @return Set of nodes which are blacklisted by the application
+   */
+  Set<String> getBlacklistedNodes();
 }

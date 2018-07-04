@@ -19,6 +19,7 @@
 package org.apache.hadoop.yarn.api;
 
 import org.apache.hadoop.classification.InterfaceAudience.Public;
+import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Evolving;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -160,6 +161,11 @@ public interface ApplicationConstants {
     APP_CLASSPATH("APP_CLASSPATH"),
     
     /**
+     * $HADOOP_CLASSPATH.
+     */
+    HADOOP_CLASSPATH("HADOOP_CLASSPATH"),
+
+    /**
      * $LD_LIBRARY_PATH
      */
     LD_LIBRARY_PATH("LD_LIBRARY_PATH"),
@@ -189,6 +195,13 @@ public interface ApplicationConstants {
      * $HADOOP_YARN_HOME
      */
     HADOOP_YARN_HOME("HADOOP_YARN_HOME"),
+
+    /**
+     * $CLASSPATH_PREPEND_DISTCACHE
+     * Private, Windows specific
+     */
+    @Private
+    CLASSPATH_PREPEND_DISTCACHE("CLASSPATH_PREPEND_DISTCACHE"),
 
     /**
      * $CONTAINER_ID
@@ -221,6 +234,12 @@ public interface ApplicationConstants {
     LOCAL_DIRS("LOCAL_DIRS"),
 
     /**
+     * $LOCAL_USER_DIRS
+     * Final, exported by NodeManager and non-modifiable by users.
+     */
+    LOCAL_USER_DIRS("LOCAL_USER_DIRS"),
+
+    /**
      * $LOG_DIRS
      * Final, exported by NodeManager and non-modifiable by users.
      * Comma separate list of directories that the container should use for
@@ -248,6 +267,7 @@ public interface ApplicationConstants {
      * Note: Use $$() method for cross-platform practice i.e. submit an
      * application from a Windows client to a Linux/Unix server or vice versa.
      * </p>
+     * @return expanded environment variable.
      */
     public String $() {
       if (Shell.WINDOWS) {
@@ -263,6 +283,7 @@ public interface ApplicationConstants {
      * expansion marker ('%' for Windows and '$' for Linux) by NodeManager on
      * container launch. For example: {{VAR}} will be replaced as $VAR on Linux,
      * and %VAR% on Windows.
+     * @return expanded environment variable.
      */
     @Public
     @Unstable

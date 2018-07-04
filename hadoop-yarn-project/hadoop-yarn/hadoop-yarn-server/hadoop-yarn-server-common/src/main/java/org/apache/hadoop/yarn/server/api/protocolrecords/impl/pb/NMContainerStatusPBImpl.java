@@ -20,12 +20,15 @@ package org.apache.hadoop.yarn.server.api.protocolrecords.impl.pb;
 
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerState;
+import org.apache.hadoop.yarn.api.records.ExecutionType;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.impl.pb.ContainerIdPBImpl;
 import org.apache.hadoop.yarn.api.records.impl.pb.PriorityPBImpl;
 import org.apache.hadoop.yarn.api.records.impl.pb.ProtoUtils;
 import org.apache.hadoop.yarn.api.records.impl.pb.ResourcePBImpl;
+import org.apache.hadoop.yarn.nodelabels.CommonNodeLabelsManager;
+import org.apache.hadoop.yarn.proto.YarnProtos;
 import org.apache.hadoop.yarn.proto.YarnProtos.ContainerIdProto;
 import org.apache.hadoop.yarn.proto.YarnProtos.ContainerStateProto;
 import org.apache.hadoop.yarn.proto.YarnProtos.PriorityProto;
@@ -33,8 +36,6 @@ import org.apache.hadoop.yarn.proto.YarnProtos.ResourceProto;
 import org.apache.hadoop.yarn.proto.YarnServerCommonServiceProtos.NMContainerStatusProto;
 import org.apache.hadoop.yarn.proto.YarnServerCommonServiceProtos.NMContainerStatusProtoOrBuilder;
 import org.apache.hadoop.yarn.server.api.protocolrecords.NMContainerStatus;
-
-import com.google.protobuf.TextFormat;
 
 public class NMContainerStatusPBImpl extends NMContainerStatus {
 
@@ -81,7 +82,18 @@ public class NMContainerStatusPBImpl extends NMContainerStatus {
 
   @Override
   public String toString() {
-    return TextFormat.shortDebugString(getProto());
+    StringBuilder sb = new StringBuilder();
+    sb.append("[").append(getContainerId()).append(", ")
+        .append("CreateTime: ").append(getCreationTime()).append(", ")
+        .append("Version: ").append(getVersion()).append(", ")
+        .append("State: ").append(getContainerState()).append(", ")
+        .append("Capability: ").append(getAllocatedResource()).append(", ")
+        .append("Diagnostics: ").append(getDiagnostics()).append(", ")
+        .append("ExitStatus: ").append(getContainerExitStatus()).append(", ")
+        .append("NodeLabelExpression: ").append(getNodeLabelExpression())
+        .append("Priority: ").append(getPriority())
+        .append("]");
+    return sb.toString();
   }
 
   @Override
@@ -176,6 +188,18 @@ public class NMContainerStatusPBImpl extends NMContainerStatus {
   }
 
   @Override
+  public int getVersion() {
+    NMContainerStatusProtoOrBuilder p = viaProto ? proto : builder;
+    return p.getVersion();
+  }
+
+  @Override
+  public void setVersion(int version) {
+    maybeInitBuilder();
+    builder.setVersion(version);
+  }
+
+  @Override
   public Priority getPriority() {
     NMContainerStatusProtoOrBuilder p = viaProto ? proto : builder;
     if (this.priority != null) {
@@ -207,6 +231,44 @@ public class NMContainerStatusPBImpl extends NMContainerStatus {
     maybeInitBuilder();
     builder.setCreationTime(creationTime);
   }
+  
+  @Override
+  public String getNodeLabelExpression() {
+    NMContainerStatusProtoOrBuilder p = viaProto ? proto : builder;
+    if (p.hasNodeLabelExpression()) {
+      return p.getNodeLabelExpression();
+    }
+    return CommonNodeLabelsManager.NO_LABEL;
+  }
+
+  @Override
+  public void setNodeLabelExpression(String nodeLabelExpression) {
+    maybeInitBuilder();
+    if (nodeLabelExpression == null) {
+      builder.clearNodeLabelExpression();
+      return;
+    }
+    builder.setNodeLabelExpression(nodeLabelExpression);
+  }
+
+  @Override
+  public synchronized ExecutionType getExecutionType() {
+    NMContainerStatusProtoOrBuilder p = viaProto ? proto : builder;
+    if (!p.hasExecutionType()) {
+      return ExecutionType.GUARANTEED;
+    }
+    return convertFromProtoFormat(p.getExecutionType());
+  }
+
+  @Override
+  public synchronized void setExecutionType(ExecutionType executionType) {
+    maybeInitBuilder();
+    if (executionType == null) {
+      builder.clearExecutionType();
+      return;
+    }
+    builder.setExecutionType(convertToProtoFormat(executionType));
+  }
 
   private void mergeLocalToBuilder() {
     if (this.containerId != null
@@ -215,9 +277,7 @@ public class NMContainerStatusPBImpl extends NMContainerStatus {
       builder.setContainerId(convertToProtoFormat(this.containerId));
     }
 
-    if (this.resource != null
-        && !((ResourcePBImpl) this.resource).getProto().equals(
-          builder.getResource())) {
+    if (this.resource != null) {
       builder.setResource(convertToProtoFormat(this.resource));
     }
 
@@ -254,7 +314,7 @@ public class NMContainerStatusPBImpl extends NMContainerStatus {
   }
 
   private ResourceProto convertToProtoFormat(Resource t) {
-    return ((ResourcePBImpl) t).getProto();
+    return ProtoUtils.convertToProtoFormat(t);
   }
 
   private ContainerStateProto
@@ -275,4 +335,12 @@ public class NMContainerStatusPBImpl extends NMContainerStatus {
     return ((PriorityPBImpl)t).getProto();
   }
 
+  private ExecutionType convertFromProtoFormat(
+      YarnProtos.ExecutionTypeProto e) {
+    return ProtoUtils.convertFromProtoFormat(e);
+  }
+
+  private YarnProtos.ExecutionTypeProto convertToProtoFormat(ExecutionType e) {
+    return ProtoUtils.convertToProtoFormat(e);
+  }
 }

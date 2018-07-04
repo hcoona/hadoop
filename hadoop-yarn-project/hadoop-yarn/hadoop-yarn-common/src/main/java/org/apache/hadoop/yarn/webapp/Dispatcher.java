@@ -21,6 +21,8 @@ package org.apache.hadoop.yarn.webapp;
 import static com.google.common.base.Preconditions.checkState;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -35,6 +37,7 @@ import org.apache.hadoop.http.HtmlQuoting;
 import org.apache.hadoop.yarn.webapp.Controller.RequestContext;
 import org.apache.hadoop.yarn.webapp.Router.Dest;
 import org.apache.hadoop.yarn.webapp.view.ErrorPage;
+import org.apache.hadoop.yarn.webapp.view.RobotsTextPage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -115,8 +118,25 @@ public class Dispatcher extends HttpServlet {
     if (pathInfo == null) {
       pathInfo = "/";
     }
+    // The implementation class of HttpServletRequest in
+    // Guice-3.0 does not decode paths that are encoded,
+    // decode path info here for further operation.
+    try {
+      pathInfo = new URI(pathInfo).getPath();
+    }  catch (URISyntaxException ex) {
+      // Just leave it alone for compatibility.
+      LOG.error(pathInfo + ": Failed to decode path.", ex);
+    }
     Controller.RequestContext rc =
         injector.getInstance(Controller.RequestContext.class);
+
+    //short-circuit robots.txt serving for all YARN webapps.
+    if (uri.equals(RobotsTextPage.ROBOTS_TXT_PATH)) {
+      rc.setStatus(HttpServletResponse.SC_FOUND);
+      render(RobotsTextPage.class);
+      return;
+    }
+
     if (setCookieParams(rc, req) > 0) {
       Cookie ec = rc.cookies().get(ERROR_COOKIE);
       if (ec != null) {

@@ -23,6 +23,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.StringReader;
+import java.util.ArrayList;
 import java.util.Collection;
 
 import javax.ws.rs.core.MediaType;
@@ -31,24 +32,27 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
+import org.apache.hadoop.yarn.api.records.ResourceRequest;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.MockAM;
 import org.apache.hadoop.yarn.server.resourcemanager.MockNM;
 import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
-import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppState;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttempt;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttemptState;
+
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.AbstractYarnScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fifo.FifoScheduler;
-import org.apache.hadoop.yarn.server.resourcemanager.security.QueueACLsManager;
-import org.apache.hadoop.yarn.server.security.ApplicationACLsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.AppInfo;
 import org.apache.hadoop.yarn.webapp.GenericExceptionHandler;
+import org.apache.hadoop.yarn.webapp.JerseyTestBase;
 import org.apache.hadoop.yarn.webapp.WebServicesTestUtils;
 import org.codehaus.jettison.json.JSONArray;
 import org.codehaus.jettison.json.JSONException;
@@ -70,13 +74,12 @@ import com.sun.jersey.api.client.UniformInterfaceException;
 import com.sun.jersey.api.client.WebResource;
 import com.sun.jersey.core.util.MultivaluedMapImpl;
 import com.sun.jersey.guice.spi.container.servlet.GuiceContainer;
-import com.sun.jersey.test.framework.JerseyTest;
 import com.sun.jersey.test.framework.WebAppDescriptor;
 
-public class TestRMWebServicesApps extends JerseyTest {
+public class TestRMWebServicesApps extends JerseyTestBase {
 
   private static MockRM rm;
-  
+
   private static final int CONTAINER_MB = 1024;
 
   private Injector injector = Guice.createInjector(new ServletModule() {
@@ -92,10 +95,6 @@ public class TestRMWebServicesApps extends JerseyTest {
           ResourceScheduler.class);
       rm = new MockRM(conf);
       bind(ResourceManager.class).toInstance(rm);
-      bind(RMContext.class).toInstance(rm.getRMContext());
-      bind(ApplicationACLsManager.class).toInstance(
-          rm.getApplicationACLsManager());
-      bind(QueueACLsManager.class).toInstance(rm.getQueueACLsManager());
       serve("/*").with(GuiceContainer.class);
     }
   });
@@ -173,7 +172,37 @@ public class TestRMWebServicesApps extends JerseyTest {
     assertEquals("incorrect number of elements", 1, nodesApps.getLength());
     NodeList nodes = dom.getElementsByTagName("app");
     assertEquals("incorrect number of elements", 1, nodes.getLength());
-    verifyAppsXML(nodes, app1);
+    verifyAppsXML(nodes, app1, false);
+    rm.stop();
+  }
+
+  @Test
+  public void testRunningApp() throws JSONException, Exception {
+    rm.start();
+    MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
+    RMApp app1 = rm.submitApp(CONTAINER_MB, "testwordcount", "user1");
+    MockAM am1 = MockRM.launchAndRegisterAM(app1, rm, amNodeManager);
+    am1.allocate("*", 4096, 1, new ArrayList<ContainerId>());
+    amNodeManager.nodeHeartbeat(true);
+
+    WebResource r = resource();
+    ClientResponse response = r.path("ws").path("v1").path("cluster")
+        .path("apps").accept(MediaType.APPLICATION_XML)
+        .get(ClientResponse.class);
+    assertEquals(MediaType.APPLICATION_XML_TYPE, response.getType());
+    String xml = response.getEntity(String.class);
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    DocumentBuilder db = dbf.newDocumentBuilder();
+    InputSource is = new InputSource();
+    is.setCharacterStream(new StringReader(xml));
+    Document dom = db.parse(is);
+    NodeList nodesApps = dom.getElementsByTagName("apps");
+    assertEquals("incorrect number of elements", 1, nodesApps.getLength());
+    NodeList nodes = dom.getElementsByTagName("app");
+    assertEquals("incorrect number of elements", 1, nodes.getLength());
+    verifyAppsXML(nodes, app1, true);
+
+    testAppsHelper("apps/", app1, MediaType.APPLICATION_JSON, true);
     rm.stop();
   }
 
@@ -206,6 +235,11 @@ public class TestRMWebServicesApps extends JerseyTest {
 
   public void testAppsHelper(String path, RMApp app, String media)
       throws JSONException, Exception {
+    testAppsHelper(path, app, media, false);
+  }
+
+  public void testAppsHelper(String path, RMApp app, String media,
+      boolean hasResourceReq) throws JSONException, Exception {
     WebResource r = resource();
 
     ClientResponse response = r.path("ws").path("v1").path("cluster")
@@ -217,7 +251,7 @@ public class TestRMWebServicesApps extends JerseyTest {
     assertEquals("incorrect number of elements", 1, apps.length());
     JSONArray array = apps.getJSONArray("app");
     assertEquals("incorrect number of elements", 1, array.length());
-    verifyAppInfo(array.getJSONObject(0), app);
+    verifyAppInfo(array.getJSONObject(0), app, hasResourceReq);
 
   }
 
@@ -240,7 +274,7 @@ public class TestRMWebServicesApps extends JerseyTest {
     assertEquals("incorrect number of elements", 1, apps.length());
     JSONArray array = apps.getJSONArray("app");
     assertEquals("incorrect number of elements", 1, array.length());
-    verifyAppInfo(array.getJSONObject(0), app1);
+    verifyAppInfo(array.getJSONObject(0), app1, false);
     rm.stop();
   }
 
@@ -284,7 +318,7 @@ public class TestRMWebServicesApps extends JerseyTest {
     assertEquals("incorrect number of elements", 1, apps.length());
     array = apps.getJSONArray("app");
     assertEquals("incorrect number of elements", 2, array.length());
-    assertTrue("both app states of ACCEPTED and KILLED are not present", 
+    assertTrue("both app states of ACCEPTED and KILLED are not present",
         (array.getJSONObject(0).getString("state").equals("ACCEPTED") &&
         array.getJSONObject(1).getString("state").equals("KILLED")) ||
         (array.getJSONObject(0).getString("state").equals("KILLED") &&
@@ -333,12 +367,12 @@ public class TestRMWebServicesApps extends JerseyTest {
     assertEquals("incorrect number of elements", 1, apps.length());
     array = apps.getJSONArray("app");
     assertEquals("incorrect number of elements", 2, array.length());
-    assertTrue("both app states of ACCEPTED and KILLED are not present", 
+    assertTrue("both app states of ACCEPTED and KILLED are not present",
         (array.getJSONObject(0).getString("state").equals("ACCEPTED") &&
         array.getJSONObject(1).getString("state").equals("KILLED")) ||
         (array.getJSONObject(0).getString("state").equals("KILLED") &&
         array.getJSONObject(1).getString("state").equals("ACCEPTED")));
-    
+
     rm.stop();
   }
 
@@ -473,7 +507,7 @@ public class TestRMWebServicesApps extends JerseyTest {
     assertEquals("incorrect number of elements", 1, apps.length());
     JSONArray array = apps.getJSONArray("app");
     assertEquals("incorrect number of elements", 1, array.length());
-    verifyAppInfo(array.getJSONObject(0), app1);
+    verifyAppInfo(array.getJSONObject(0), app1, false);
     rm.stop();
   }
 
@@ -982,6 +1016,139 @@ public class TestRMWebServicesApps extends JerseyTest {
   }
 
   @Test
+  public void testAppsQueryWithInvaildDeselects()
+      throws JSONException, Exception {
+    try {
+      rm.start();
+      MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
+      rm.submitApp(CONTAINER_MB);
+      amNodeManager.nodeHeartbeat(true);
+      WebResource r = resource();
+      ClientResponse response = r.path("ws").path("v1").path("cluster")
+          .path("apps").queryParam("deSelects", "INVALIED_deSelectsParam")
+          .accept(MediaType.APPLICATION_JSON).get(ClientResponse.class);
+      assertEquals(Status.BAD_REQUEST, response.getClientResponseStatus());
+      assertEquals(MediaType.APPLICATION_JSON_TYPE, response.getType());
+      JSONObject msg = response.getEntity(JSONObject.class);
+      JSONObject exception = msg.getJSONObject("RemoteException");
+      assertEquals("incorrect number of elements", 3, exception.length());
+      String message = exception.getString("message");
+      String type = exception.getString("exception");
+      String classname = exception.getString("javaClassName");
+      WebServicesTestUtils.checkStringContains("exception message",
+          "java.lang.Exception: Invalid deSelects string"
+             + " INVALIED_deSelectsParam " + "specified. It should be one of",
+          message);
+      WebServicesTestUtils.checkStringEqual("exception type",
+          "BadRequestException", type);
+      WebServicesTestUtils.checkStringEqual("exception classname",
+          "org.apache.hadoop.yarn.webapp.BadRequestException", classname);
+    } finally {
+      rm.stop();
+    }
+  }
+
+  @Test
+  public void testAppsQueryWithDeselects()
+      throws JSONException, Exception {
+    rm.start();
+    MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
+    rm.submitApp(CONTAINER_MB);
+    amNodeManager.nodeHeartbeat(true);
+    WebResource r = resource();
+
+    MultivaluedMapImpl params = new MultivaluedMapImpl();
+    params.add("deSelects",
+        DeSelectFields.DeSelectType.RESOURCE_REQUESTS.toString());
+    ClientResponse response = r.path("ws").path("v1").path("cluster")
+        .path("apps").queryParams(params)
+        .accept(MediaType.APPLICATION_JSON).get(ClientResponse.class);
+    assertEquals(MediaType.APPLICATION_JSON_TYPE, response.getType());
+
+    JSONObject json = response.getEntity(JSONObject.class);
+    assertEquals("incorrect number of elements", 1, json.length());
+    JSONObject apps = json.getJSONObject("apps");
+    assertEquals("incorrect number of elements", 1, apps.length());
+    JSONArray array = apps.getJSONArray("app");
+    assertEquals("incorrect number of elements", 1, array.length());
+    JSONObject app = array.getJSONObject(0);
+    assertTrue("resource requests shouldn't exist",
+        !app.has("resourceRequests"));
+
+    params.clear();
+    params.add("deSelects",
+        DeSelectFields.DeSelectType.AM_NODE_LABEL_EXPRESSION.toString());
+    response =
+        r.path("ws").path("v1").path("cluster").path("apps").queryParams(params)
+            .accept(MediaType.APPLICATION_JSON).get(ClientResponse.class);
+    assertEquals(MediaType.APPLICATION_JSON_TYPE, response.getType());
+
+    json = response.getEntity(JSONObject.class);
+    assertEquals("incorrect number of elements", 1, json.length());
+    apps = json.getJSONObject("apps");
+    assertEquals("incorrect number of elements", 1, apps.length());
+    array = apps.getJSONArray("app");
+    assertEquals("incorrect number of elements", 1, array.length());
+    app = array.getJSONObject(0);
+    assertTrue("AMNodeLabelExpression shouldn't exist",
+        !app.has("amNodeLabelExpression"));
+
+    params.clear();
+    params.add("deSelects", DeSelectFields.DeSelectType.TIMEOUTS.toString());
+    response =
+        r.path("ws").path("v1").path("cluster").path("apps").queryParams(params)
+            .accept(MediaType.APPLICATION_JSON).get(ClientResponse.class);
+    assertEquals(MediaType.APPLICATION_JSON_TYPE, response.getType());
+
+    json = response.getEntity(JSONObject.class);
+    assertEquals("incorrect number of elements", 1, json.length());
+    apps = json.getJSONObject("apps");
+    assertEquals("incorrect number of elements", 1, apps.length());
+    array = apps.getJSONArray("app");
+    assertEquals("incorrect number of elements", 1, array.length());
+    app = array.getJSONObject(0);
+    assertTrue("Timeouts shouldn't exist", !app.has("timeouts"));
+    rm.stop();
+
+    params.clear();
+    params.add("deSelects",
+        DeSelectFields.DeSelectType.APP_NODE_LABEL_EXPRESSION.toString());
+    response =
+        r.path("ws").path("v1").path("cluster").path("apps").queryParams(params)
+            .accept(MediaType.APPLICATION_JSON).get(ClientResponse.class);
+    assertEquals(MediaType.APPLICATION_JSON_TYPE, response.getType());
+
+    json = response.getEntity(JSONObject.class);
+    assertEquals("incorrect number of elements", 1, json.length());
+    apps = json.getJSONObject("apps");
+    assertEquals("incorrect number of elements", 1, apps.length());
+    array = apps.getJSONArray("app");
+    assertEquals("incorrect number of elements", 1, array.length());
+    app = array.getJSONObject(0);
+    assertTrue("AppNodeLabelExpression shouldn't exist",
+        !app.has("appNodeLabelExpression"));
+    rm.stop();
+
+    params.clear();
+    params
+        .add("deSelects", DeSelectFields.DeSelectType.RESOURCE_INFO.toString());
+    response =
+        r.path("ws").path("v1").path("cluster").path("apps").queryParams(params)
+            .accept(MediaType.APPLICATION_JSON).get(ClientResponse.class);
+    assertEquals(MediaType.APPLICATION_JSON_TYPE, response.getType());
+
+    json = response.getEntity(JSONObject.class);
+    assertEquals("incorrect number of elements", 1, json.length());
+    apps = json.getJSONObject("apps");
+    assertEquals("incorrect number of elements", 1, apps.length());
+    array = apps.getJSONArray("app");
+    assertEquals("incorrect number of elements", 1, array.length());
+    app = array.getJSONObject(0);
+    assertTrue("Resource info shouldn't exist", !app.has("resourceInfo"));
+    rm.stop();
+  }
+
+  @Test
   public void testAppStatistics() throws JSONException, Exception {
     try {
       rm.start();
@@ -1156,6 +1323,30 @@ public class TestRMWebServicesApps extends JerseyTest {
   }
 
   @Test
+  public void testUnmarshalAppInfo() throws JSONException, Exception {
+    rm.start();
+    MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
+    RMApp app1 = rm.submitApp(CONTAINER_MB, "testwordcount", "user1");
+    amNodeManager.nodeHeartbeat(true);
+
+    WebResource r = resource();
+    ClientResponse response = r.path("ws").path("v1").path("cluster")
+        .path("apps").path(app1.getApplicationId().toString())
+        .accept(MediaType.APPLICATION_XML).get(ClientResponse.class);
+
+    AppInfo appInfo = response.getEntity(AppInfo.class);
+
+    // Check only a few values; all are validated in testSingleApp.
+    assertEquals(app1.getApplicationId().toString(), appInfo.getAppId());
+    assertEquals(app1.getName(), appInfo.getName());
+    assertEquals(app1.createApplicationState(), appInfo.getState());
+    assertEquals(app1.getAMResourceRequests().get(0).getCapability()
+            .getMemorySize(), appInfo.getAllocatedMB());
+
+    rm.stop();
+  }
+
+  @Test
   public void testSingleAppsSlash() throws JSONException, Exception {
     rm.start();
     MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
@@ -1201,11 +1392,13 @@ public class TestRMWebServicesApps extends JerseyTest {
       String type = exception.getString("exception");
       String classname = exception.getString("javaClassName");
       WebServicesTestUtils.checkStringMatch("exception message",
-          "For input string: \"invalid\"", message);
+          "java.lang.IllegalArgumentException: Invalid ApplicationId:"
+              + " application_invalid_12",
+          message);
       WebServicesTestUtils.checkStringMatch("exception type",
-          "NumberFormatException", type);
+          "BadRequestException", type);
       WebServicesTestUtils.checkStringMatch("exception classname",
-          "java.lang.NumberFormatException", classname);
+          "org.apache.hadoop.yarn.webapp.BadRequestException", classname);
 
     } finally {
       rm.stop();
@@ -1258,7 +1451,7 @@ public class TestRMWebServicesApps extends JerseyTest {
     JSONObject json = response.getEntity(JSONObject.class);
 
     assertEquals("incorrect number of elements", 1, json.length());
-    verifyAppInfo(json.getJSONObject("app"), app);
+    verifyAppInfo(json.getJSONObject("app"), app, false);
   }
 
   @Test
@@ -1281,14 +1474,14 @@ public class TestRMWebServicesApps extends JerseyTest {
     Document dom = db.parse(is);
     NodeList nodes = dom.getElementsByTagName("app");
     assertEquals("incorrect number of elements", 1, nodes.getLength());
-    verifyAppsXML(nodes, app1);
+    verifyAppsXML(nodes, app1, false);
     rm.stop();
   }
 
-  public void verifyAppsXML(NodeList nodes, RMApp app) throws JSONException,
-      Exception {
+  public void verifyAppsXML(NodeList nodes, RMApp app, boolean hasResourceReq)
+      throws JSONException, Exception {
 
-     for (int i = 0; i < nodes.getLength(); i++) {
+    for (int i = 0; i < nodes.getLength(); i++) {
       Element element = (Element) nodes.item(i);
 
       verifyAppInfoGeneric(app,
@@ -1297,6 +1490,7 @@ public class TestRMWebServicesApps extends JerseyTest {
           WebServicesTestUtils.getXmlString(element, "name"),
           WebServicesTestUtils.getXmlString(element, "applicationType"),
           WebServicesTestUtils.getXmlString(element, "queue"),
+          WebServicesTestUtils.getXmlInt(element, "priority"),
           WebServicesTestUtils.getXmlString(element, "state"),
           WebServicesTestUtils.getXmlString(element, "finalStatus"),
           WebServicesTestUtils.getXmlFloat(element, "progress"),
@@ -1311,44 +1505,110 @@ public class TestRMWebServicesApps extends JerseyTest {
           WebServicesTestUtils.getXmlInt(element, "allocatedMB"),
           WebServicesTestUtils.getXmlInt(element, "allocatedVCores"),
           WebServicesTestUtils.getXmlInt(element, "runningContainers"),
+          WebServicesTestUtils.getXmlFloat(element, "queueUsagePercentage"),
+          WebServicesTestUtils.getXmlFloat(element, "clusterUsagePercentage"),
           WebServicesTestUtils.getXmlInt(element, "preemptedResourceMB"),
           WebServicesTestUtils.getXmlInt(element, "preemptedResourceVCores"),
           WebServicesTestUtils.getXmlInt(element, "numNonAMContainerPreempted"),
-          WebServicesTestUtils.getXmlInt(element, "numAMContainerPreempted"));
+          WebServicesTestUtils.getXmlInt(element, "numAMContainerPreempted"),
+          WebServicesTestUtils.getXmlString(element, "logAggregationStatus"),
+          WebServicesTestUtils.getXmlBoolean(element, "unmanagedApplication"),
+          WebServicesTestUtils.getXmlString(element, "appNodeLabelExpression"),
+          WebServicesTestUtils.getXmlString(element, "amNodeLabelExpression"),
+          WebServicesTestUtils.getXmlString(element, "amRPCAddress"));
+
+      if (hasResourceReq) {
+        assertEquals(element.getElementsByTagName("resourceRequests")
+                .getLength(), 1);
+        Element resourceRequests =
+            (Element) element.getElementsByTagName("resourceRequests").item(0);
+        Element capability = (Element) resourceRequests
+            .getElementsByTagName("capability").item(0);
+        ResourceRequest rr =
+            ((AbstractYarnScheduler)rm.getRMContext().getScheduler())
+                .getApplicationAttempt(
+                    app.getCurrentAppAttempt().getAppAttemptId())
+                .getAppSchedulingInfo().getAllResourceRequests().get(0);
+        verifyResourceRequestsGeneric(rr,
+            WebServicesTestUtils.getXmlString(resourceRequests,
+                "nodeLabelExpression"),
+            WebServicesTestUtils.getXmlInt(resourceRequests, "numContainers"),
+            WebServicesTestUtils.getXmlBoolean(
+                resourceRequests, "relaxLocality"),
+            WebServicesTestUtils.getXmlInt(resourceRequests, "priority"),
+            WebServicesTestUtils.getXmlString(resourceRequests, "resourceName"),
+            WebServicesTestUtils.getXmlLong(capability, "memory"),
+            WebServicesTestUtils.getXmlLong(capability, "vCores"),
+            WebServicesTestUtils.getXmlString(
+                resourceRequests, "executionType"),
+            WebServicesTestUtils.getXmlBoolean(resourceRequests,
+                "enforceExecutionType"));
+      }
     }
   }
 
-  public void verifyAppInfo(JSONObject info, RMApp app) throws JSONException,
-      Exception {
+  public void verifyAppInfo(JSONObject info, RMApp app, boolean hasResourceReqs)
+      throws JSONException, Exception {
 
-    // 28 because trackingUrl not assigned yet
-    assertEquals("incorrect number of elements", 26, info.length());
-
+    int expectedNumberOfElements = 36 + (hasResourceReqs ? 2 : 0);
+    String appNodeLabelExpression = null;
+    String amNodeLabelExpression = null;
+    if (app.getApplicationSubmissionContext()
+        .getNodeLabelExpression() != null) {
+      expectedNumberOfElements++;
+      appNodeLabelExpression = info.getString("appNodeLabelExpression");
+    }
+    if (app.getAMResourceRequests().get(0).getNodeLabelExpression() != null) {
+      expectedNumberOfElements++;
+      amNodeLabelExpression = info.getString("amNodeLabelExpression");
+    }
+    String amRPCAddress = null;
+    if (AppInfo.getAmRPCAddressFromRMAppAttempt(app.getCurrentAppAttempt())
+        != null) {
+      expectedNumberOfElements++;
+      amRPCAddress = info.getString("amRPCAddress");
+    }
+    assertEquals("incorrect number of elements", expectedNumberOfElements,
+        info.length());
     verifyAppInfoGeneric(app, info.getString("id"), info.getString("user"),
         info.getString("name"), info.getString("applicationType"),
-        info.getString("queue"), info.getString("state"),
-        info.getString("finalStatus"), (float) info.getDouble("progress"),
-        info.getString("trackingUI"), info.getString("diagnostics"),
-        info.getLong("clusterId"), info.getLong("startedTime"),
-        info.getLong("finishedTime"), info.getLong("elapsedTime"),
-        info.getString("amHostHttpAddress"), info.getString("amContainerLogs"),
-        info.getInt("allocatedMB"), info.getInt("allocatedVCores"),
-        info.getInt("runningContainers"), 
+        info.getString("queue"), info.getInt("priority"),
+        info.getString("state"), info.getString("finalStatus"),
+        (float) info.getDouble("progress"), info.getString("trackingUI"),
+        info.getString("diagnostics"), info.getLong("clusterId"),
+        info.getLong("startedTime"), info.getLong("finishedTime"),
+        info.getLong("elapsedTime"), info.getString("amHostHttpAddress"),
+        info.getString("amContainerLogs"), info.getInt("allocatedMB"),
+        info.getInt("allocatedVCores"), info.getInt("runningContainers"),
+        (float) info.getDouble("queueUsagePercentage"),
+        (float) info.getDouble("clusterUsagePercentage"),
         info.getInt("preemptedResourceMB"),
         info.getInt("preemptedResourceVCores"),
         info.getInt("numNonAMContainerPreempted"),
-        info.getInt("numAMContainerPreempted"));
+        info.getInt("numAMContainerPreempted"),
+        info.getString("logAggregationStatus"),
+        info.getBoolean("unmanagedApplication"),
+        appNodeLabelExpression,
+        amNodeLabelExpression,
+        amRPCAddress);
+
+    if (hasResourceReqs) {
+      verifyResourceRequests(info.getJSONArray("resourceRequests"), app);
+    }
   }
 
   public void verifyAppInfoGeneric(RMApp app, String id, String user,
-      String name, String applicationType, String queue, String state,
-      String finalStatus, float progress, String trackingUI,
+      String name, String applicationType, String queue, int prioirty,
+      String state, String finalStatus, float progress, String trackingUI,
       String diagnostics, long clusterId, long startedTime, long finishedTime,
       long elapsedTime, String amHostHttpAddress, String amContainerLogs,
       int allocatedMB, int allocatedVCores, int numContainers,
+      float queueUsagePerc, float clusterUsagePerc,
       int preemptedResourceMB, int preemptedResourceVCores,
-      int numNonAMContainerPreempted, int numAMContainerPreempted) throws JSONException,
-      Exception {
+      int numNonAMContainerPreempted, int numAMContainerPreempted,
+      String logAggregationStatus, boolean unmanagedApplication,
+      String appNodeLabelExpression, String amNodeLabelExpression,
+      String amRPCAddress) throws JSONException, Exception {
 
     WebServicesTestUtils.checkStringMatch("id", app.getApplicationId()
         .toString(), id);
@@ -1357,15 +1617,18 @@ public class TestRMWebServicesApps extends JerseyTest {
     WebServicesTestUtils.checkStringMatch("applicationType",
       app.getApplicationType(), applicationType);
     WebServicesTestUtils.checkStringMatch("queue", app.getQueue(), queue);
+    assertEquals("priority doesn't match", 0, prioirty);
     WebServicesTestUtils.checkStringMatch("state", app.getState().toString(),
         state);
     WebServicesTestUtils.checkStringMatch("finalStatus", app
         .getFinalApplicationStatus().toString(), finalStatus);
     assertEquals("progress doesn't match", 0, progress, 0.0);
-    WebServicesTestUtils.checkStringMatch("trackingUI", "UNASSIGNED",
-        trackingUI);
-    WebServicesTestUtils.checkStringMatch("diagnostics", app.getDiagnostics()
-        .toString(), diagnostics);
+    if ("UNASSIGNED".equals(trackingUI)) {
+      WebServicesTestUtils.checkStringMatch("trackingUI", "UNASSIGNED",
+          trackingUI);
+    }
+    WebServicesTestUtils.checkStringEqual("diagnostics",
+        app.getDiagnostics().toString(), diagnostics);
     assertEquals("clusterId doesn't match",
         ResourceManager.getClusterTimeStamp(), clusterId);
     assertEquals("startedTime doesn't match", app.getStartTime(), startedTime);
@@ -1381,9 +1644,11 @@ public class TestRMWebServicesApps extends JerseyTest {
         amContainerLogs.endsWith("/" + app.getUser()));
     assertEquals("allocatedMB doesn't match", 1024, allocatedMB);
     assertEquals("allocatedVCores doesn't match", 1, allocatedVCores);
+    assertEquals("queueUsagePerc doesn't match", 50.0f, queueUsagePerc, 0.01f);
+    assertEquals("clusterUsagePerc doesn't match", 50.0f, clusterUsagePerc, 0.01f);
     assertEquals("numContainers doesn't match", 1, numContainers);
     assertEquals("preemptedResourceMB doesn't match", app
-        .getRMAppMetrics().getResourcePreempted().getMemory(),
+        .getRMAppMetrics().getResourcePreempted().getMemorySize(),
         preemptedResourceMB);
     assertEquals("preemptedResourceVCores doesn't match", app
         .getRMAppMetrics().getResourcePreempted().getVirtualCores(),
@@ -1394,6 +1659,68 @@ public class TestRMWebServicesApps extends JerseyTest {
     assertEquals("numAMContainerPreempted doesn't match", app
         .getRMAppMetrics().getNumAMContainersPreempted(),
         numAMContainerPreempted);
+    assertEquals("Log aggregation Status doesn't match", app
+        .getLogAggregationStatusForAppReport().toString(),
+        logAggregationStatus);
+    assertEquals("unmanagedApplication doesn't match", app
+        .getApplicationSubmissionContext().getUnmanagedAM(),
+        unmanagedApplication);
+    assertEquals("unmanagedApplication doesn't match",
+        app.getApplicationSubmissionContext().getNodeLabelExpression(),
+        appNodeLabelExpression);
+    assertEquals("unmanagedApplication doesn't match",
+        app.getAMResourceRequests().get(0).getNodeLabelExpression(),
+        amNodeLabelExpression);
+    assertEquals("amRPCAddress",
+        AppInfo.getAmRPCAddressFromRMAppAttempt(app.getCurrentAppAttempt()),
+        amRPCAddress);
+  }
+
+  public void verifyResourceRequests(JSONArray resourceRequest, RMApp app)
+      throws JSONException {
+    JSONObject requestInfo = resourceRequest.getJSONObject(0);
+    ResourceRequest rr =
+        ((AbstractYarnScheduler) rm.getRMContext().getScheduler())
+            .getApplicationAttempt(
+                app.getCurrentAppAttempt().getAppAttemptId())
+            .getAppSchedulingInfo().getAllResourceRequests().get(0);
+    verifyResourceRequestsGeneric(rr,
+        requestInfo.getString("nodeLabelExpression"),
+        requestInfo.getInt("numContainers"),
+        requestInfo.getBoolean("relaxLocality"), requestInfo.getInt("priority"),
+        requestInfo.getString("resourceName"),
+        requestInfo.getJSONObject("capability").getLong("memory"),
+        requestInfo.getJSONObject("capability").getLong("vCores"),
+        requestInfo.getJSONObject("executionTypeRequest")
+            .getString("executionType"),
+        requestInfo.getJSONObject("executionTypeRequest")
+            .getBoolean("enforceExecutionType"));
+  }
+
+  public void verifyResourceRequestsGeneric(ResourceRequest request,
+      String nodeLabelExpression, int numContainers, boolean relaxLocality,
+      int priority, String resourceName, long memory, long vCores,
+      String executionType, boolean enforceExecutionType) {
+    assertEquals("nodeLabelExpression doesn't match",
+        request.getNodeLabelExpression(), nodeLabelExpression);
+    assertEquals("numContainers doesn't match", request.getNumContainers(),
+        numContainers);
+    assertEquals("relaxLocality doesn't match", request.getRelaxLocality(),
+        relaxLocality);
+    assertEquals("priority does not match", request.getPriority().getPriority(),
+        priority);
+    assertEquals("resourceName does not match", request.getResourceName(),
+        resourceName);
+    assertEquals("memory does not match",
+        request.getCapability().getMemorySize(), memory);
+    assertEquals("vCores does not match",
+        request.getCapability().getVirtualCores(), vCores);
+    assertEquals("executionType does not match",
+        request.getExecutionTypeRequest().getExecutionType().name(),
+        executionType);
+    assertEquals("enforceExecutionType does not match",
+        request.getExecutionTypeRequest().getEnforceExecutionType(),
+        enforceExecutionType);
   }
 
   @Test
@@ -1421,7 +1748,7 @@ public class TestRMWebServicesApps extends JerseyTest {
     while (true) {
       // fail the AM by sending CONTAINER_FINISHED event without registering.
       amNodeManager.nodeHeartbeat(am.getApplicationAttemptId(), 1, ContainerState.COMPLETE);
-      am.waitForState(RMAppAttemptState.FAILED);
+      rm.waitForState(am.getApplicationAttemptId(), RMAppAttemptState.FAILED);
       if (numAttempt == maxAppAttempts) {
         rm.waitForState(app1.getApplicationId(), RMAppState.FAILED);
         break;
@@ -1460,18 +1787,19 @@ public class TestRMWebServicesApps extends JerseyTest {
   }
 
   @Test
-  public void testInvalidAppAttempts() throws JSONException, Exception {
+  public void testInvalidAppIdGetAttempts() throws JSONException, Exception {
     rm.start();
     MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
-    rm.submitApp(CONTAINER_MB);
+    RMApp app = rm.submitApp(CONTAINER_MB);
     amNodeManager.nodeHeartbeat(true);
     WebResource r = resource();
 
     try {
       r.path("ws").path("v1").path("cluster").path("apps")
-          .path("application_invalid_12").accept(MediaType.APPLICATION_JSON)
+          .path("application_invalid_12").path("appattempts")
+          .accept(MediaType.APPLICATION_JSON)
           .get(JSONObject.class);
-      fail("should have thrown exception on invalid appid");
+      fail("should have thrown exception on invalid appAttempt");
     } catch (UniformInterfaceException ue) {
       ClientResponse response = ue.getResponse();
 
@@ -1484,11 +1812,52 @@ public class TestRMWebServicesApps extends JerseyTest {
       String type = exception.getString("exception");
       String classname = exception.getString("javaClassName");
       WebServicesTestUtils.checkStringMatch("exception message",
-          "For input string: \"invalid\"", message);
+          "java.lang.IllegalArgumentException: Invalid ApplicationId:"
+              + " application_invalid_12",
+          message);
       WebServicesTestUtils.checkStringMatch("exception type",
-          "NumberFormatException", type);
+          "BadRequestException", type);
       WebServicesTestUtils.checkStringMatch("exception classname",
-          "java.lang.NumberFormatException", classname);
+          "org.apache.hadoop.yarn.webapp.BadRequestException", classname);
+
+    } finally {
+      rm.stop();
+    }
+  }
+
+  @Test
+  public void testInvalidAppAttemptId() throws JSONException, Exception {
+    rm.start();
+    MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
+    RMApp app = rm.submitApp(CONTAINER_MB);
+    amNodeManager.nodeHeartbeat(true);
+    WebResource r = resource();
+
+    try {
+      r.path("ws").path("v1").path("cluster").path("apps")
+          .path(app.getApplicationId().toString()).path("appattempts")
+          .path("appattempt_invalid_12_000001")
+          .accept(MediaType.APPLICATION_JSON).get(JSONObject.class);
+      fail("should have thrown exception on invalid appAttempt");
+    } catch (UniformInterfaceException ue) {
+      ClientResponse response = ue.getResponse();
+
+      assertEquals(Status.BAD_REQUEST, response.getClientResponseStatus());
+      assertEquals(MediaType.APPLICATION_JSON_TYPE, response.getType());
+      JSONObject msg = response.getEntity(JSONObject.class);
+      JSONObject exception = msg.getJSONObject("RemoteException");
+      assertEquals("incorrect number of elements", 3, exception.length());
+      String message = exception.getString("message");
+      String type = exception.getString("exception");
+      String classname = exception.getString("javaClassName");
+      WebServicesTestUtils.checkStringMatch("exception message",
+          "java.lang.IllegalArgumentException: Invalid AppAttemptId:"
+              + " appattempt_invalid_12_000001",
+          message);
+      WebServicesTestUtils.checkStringMatch("exception type",
+          "BadRequestException", type);
+      WebServicesTestUtils.checkStringMatch("exception classname",
+          "org.apache.hadoop.yarn.webapp.BadRequestException", classname);
 
     } finally {
       rm.stop();
@@ -1606,7 +1975,7 @@ public class TestRMWebServicesApps extends JerseyTest {
       String user)
       throws JSONException, Exception {
 
-    assertEquals("incorrect number of elements", 6, info.length());
+    assertEquals("incorrect number of elements", 10, info.length());
 
     verifyAppAttemptInfoGeneric(appAttempt, info.getInt("id"),
         info.getLong("startTime"), info.getString("containerId"),
@@ -1629,7 +1998,7 @@ public class TestRMWebServicesApps extends JerseyTest {
         .getMasterContainer().getNodeHttpAddress(), nodeHttpAddress);
     WebServicesTestUtils.checkStringMatch("nodeId", appAttempt
         .getMasterContainer().getNodeId().toString(), nodeId);
-    assertTrue("logsLink doesn't match", logsLink.startsWith("//"));
+    assertTrue("logsLink doesn't match ", logsLink.startsWith("http://"));
     assertTrue(
         "logsLink doesn't contain user info", logsLink.endsWith("/"
         + user));

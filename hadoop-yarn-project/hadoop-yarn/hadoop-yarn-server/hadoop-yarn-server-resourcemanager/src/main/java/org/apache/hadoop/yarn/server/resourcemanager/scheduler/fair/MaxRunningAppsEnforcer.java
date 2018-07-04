@@ -30,6 +30,7 @@ import org.apache.commons.logging.LogFactory;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerApplicationAttempt.AMState;
 
 /**
  * Handles tracking and enforcement for user and queue maxRunningApps
@@ -54,26 +55,64 @@ public class MaxRunningAppsEnforcer {
   /**
    * Checks whether making the application runnable would exceed any
    * maxRunningApps limits.
+   *
+   * @param queue the current queue
+   * @param attempt the app attempt being checked
+   * @return true if the application is runnable; false otherwise
    */
-  public boolean canAppBeRunnable(FSQueue queue, String user) {
+  public boolean canAppBeRunnable(FSQueue queue, FSAppAttempt attempt) {
+    boolean ret = true;
+    if (exceedUserMaxApps(attempt.getUser())) {
+      attempt.updateAMContainerDiagnostics(AMState.INACTIVATED,
+          "The user \"" + attempt.getUser() + "\" has reached the maximum limit"
+              + " of runnable applications.");
+      ret = false;
+    } else if (exceedQueueMaxRunningApps(queue)) {
+      attempt.updateAMContainerDiagnostics(AMState.INACTIVATED,
+          "The queue \"" + queue.getName() + "\" has reached the maximum limit"
+              + " of runnable applications.");
+      ret = false;
+    }
+
+    return ret;
+  }
+
+  /**
+   * Checks whether the number of user runnable apps exceeds the limitation.
+   *
+   * @param user the user name
+   * @return true if the number hits the limit; false otherwise
+   */
+  public boolean exceedUserMaxApps(String user) {
     AllocationConfiguration allocConf = scheduler.getAllocationConfiguration();
     Integer userNumRunnable = usersNumRunnableApps.get(user);
     if (userNumRunnable == null) {
       userNumRunnable = 0;
     }
     if (userNumRunnable >= allocConf.getUserMaxApps(user)) {
-      return false;
+      return true;
     }
+
+    return false;
+  }
+
+  /**
+   * Recursively checks whether the number of queue runnable apps exceeds the
+   * limitation.
+   *
+   * @param queue the current queue
+   * @return true if the number hits the limit; false otherwise
+   */
+  public boolean exceedQueueMaxRunningApps(FSQueue queue) {
     // Check queue and all parent queues
     while (queue != null) {
-      int queueMaxApps = allocConf.getQueueMaxApps(queue.getName());
-      if (queue.getNumRunnableApps() >= queueMaxApps) {
-        return false;
+      if (queue.getNumRunnableApps() >= queue.getMaxRunningApps()) {
+        return true;
       }
       queue = queue.getParent();
     }
 
-    return true;
+    return false;
   }
 
   /**
@@ -105,6 +144,26 @@ public class MaxRunningAppsEnforcer {
   }
 
   /**
+   * This is called after reloading the allocation configuration when the
+   * scheduler is reinitilized
+   *
+   * Checks to see whether any non-runnable applications become runnable
+   * now that the max running apps of given queue has been changed
+   *
+   * Runs in O(n) where n is the number of apps that are non-runnable and in
+   * the queues that went from having no slack to having slack.
+   */
+  public void updateRunnabilityOnReload() {
+    FSParentQueue rootQueue = scheduler.getQueueManager().getRootQueue();
+    List<List<FSAppAttempt>> appsNowMaybeRunnable =
+        new ArrayList<List<FSAppAttempt>>();
+
+    gatherPossiblyRunnableAppLists(rootQueue, appsNowMaybeRunnable);
+
+    updateAppsRunnability(appsNowMaybeRunnable, Integer.MAX_VALUE);
+  }
+
+  /**
    * Checks to see whether any other applications runnable now that the given
    * application has been removed from the given queue.  And makes them so.
    * 
@@ -123,11 +182,10 @@ public class MaxRunningAppsEnforcer {
     // Thus we find the ancestor queue highest in the tree for which the app
     // that was at its maxRunningApps before the removal.
     FSQueue highestQueueWithAppsNowRunnable = (queue.getNumRunnableApps() ==
-        allocConf.getQueueMaxApps(queue.getName()) - 1) ? queue : null;
+        queue.getMaxRunningApps() - 1) ? queue : null;
     FSParentQueue parent = queue.getParent();
     while (parent != null) {
-      if (parent.getNumRunnableApps() == allocConf.getQueueMaxApps(parent
-          .getName()) - 1) {
+      if (parent.getNumRunnableApps() == parent.getMaxRunningApps() - 1) {
         highestQueueWithAppsNowRunnable = parent;
       }
       parent = parent.getParent();
@@ -156,6 +214,19 @@ public class MaxRunningAppsEnforcer {
       }
     }
 
+    updateAppsRunnability(appsNowMaybeRunnable,
+        appsNowMaybeRunnable.size());
+  }
+
+  /**
+   * Checks to see whether applications are runnable now by iterating
+   * through each one of them and check if the queue and user have slack
+   *
+   * if we know how many apps can be runnable, there is no need to iterate
+   * through all apps, maxRunnableApps is used to break out of the iteration
+   */
+  private void updateAppsRunnability(List<List<FSAppAttempt>>
+      appsNowMaybeRunnable, int maxRunnableApps) {
     // Scan through and check whether this means that any apps are now runnable
     Iterator<FSAppAttempt> iter = new MultiListStartTimeIterator(
         appsNowMaybeRunnable);
@@ -167,15 +238,13 @@ public class MaxRunningAppsEnforcer {
         continue;
       }
 
-      if (canAppBeRunnable(next.getQueue(), next.getUser())) {
+      if (canAppBeRunnable(next.getQueue(), next)) {
         trackRunnableApp(next);
         FSAppAttempt appSched = next;
-        next.getQueue().getRunnableAppSchedulables().add(appSched);
+        next.getQueue().addApp(appSched, true);
         noLongerPendingApps.add(appSched);
 
-        // No more than one app per list will be able to be made runnable, so
-        // we can stop looking after we've found that many
-        if (noLongerPendingApps.size() >= appsNowMaybeRunnable.size()) {
+        if (noLongerPendingApps.size() >= maxRunnableApps) {
           break;
         }
       }
@@ -187,19 +256,17 @@ public class MaxRunningAppsEnforcer {
     // pull them out from under the iterator.  If they are not in these lists
     // in the first place, there is a bug.
     for (FSAppAttempt appSched : noLongerPendingApps) {
-      if (!appSched.getQueue().getNonRunnableAppSchedulables()
-          .remove(appSched)) {
+      if (!appSched.getQueue().removeNonRunnableApp(appSched)) {
         LOG.error("Can't make app runnable that does not already exist in queue"
             + " as non-runnable: " + appSched + ". This should never happen.");
       }
       
       if (!usersNonRunnableApps.remove(appSched.getUser(), appSched)) {
         LOG.error("Waiting app " + appSched + " expected to be in "
-        		+ "usersNonRunnableApps, but was not. This should never happen.");
+            + "usersNonRunnableApps, but was not. This should never happen.");
       }
     }
   }
-  
   /**
    * Updates the relevant tracking variables after a runnable app with the given
    * queue and user has been removed.
@@ -236,10 +303,10 @@ public class MaxRunningAppsEnforcer {
    */
   private void gatherPossiblyRunnableAppLists(FSQueue queue,
       List<List<FSAppAttempt>> appLists) {
-    if (queue.getNumRunnableApps() < scheduler.getAllocationConfiguration()
-        .getQueueMaxApps(queue.getName())) {
+    if (queue.getNumRunnableApps() < queue.getMaxRunningApps()) {
       if (queue instanceof FSLeafQueue) {
-        appLists.add(((FSLeafQueue)queue).getNonRunnableAppSchedulables());
+        appLists.add(
+            ((FSLeafQueue)queue).getCopyOfNonRunnableAppSchedulables());
       } else {
         for (FSQueue child : queue.getChildQueues()) {
           gatherPossiblyRunnableAppLists(child, appLists);

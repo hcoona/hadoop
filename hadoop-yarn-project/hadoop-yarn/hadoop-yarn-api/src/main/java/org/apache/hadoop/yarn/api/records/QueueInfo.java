@@ -19,6 +19,7 @@
 package org.apache.hadoop.yarn.api.records;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.hadoop.classification.InterfaceAudience.Private;
@@ -29,21 +30,22 @@ import org.apache.hadoop.yarn.api.ApplicationClientProtocol;
 import org.apache.hadoop.yarn.util.Records;
 
 /**
- * <p>QueueInfo is a report of the runtime information of the queue.</p>
- * 
- * <p>It includes information such as:
- *   <ul>
- *     <li>Queue name.</li>
- *     <li>Capacity of the queue.</li>
- *     <li>Maximum capacity of the queue.</li>
- *     <li>Current capacity of the queue.</li>
- *     <li>Child queues.</li>
- *     <li>Running applications.</li>
- *     <li>{@link QueueState} of the queue.</li>
- *   </ul>
- * </p>
+ * QueueInfo is a report of the runtime information of the queue.
+ * <p>
+ * It includes information such as:
+ * <ul>
+ *   <li>Queue name.</li>
+ *   <li>Capacity of the queue.</li>
+ *   <li>Maximum capacity of the queue.</li>
+ *   <li>Current capacity of the queue.</li>
+ *   <li>Child queues.</li>
+ *   <li>Running applications.</li>
+ *   <li>{@link QueueState} of the queue.</li>
+ *   <li>{@link QueueConfigurations} of the queue.</li>
+ * </ul>
  *
  * @see QueueState
+ * @see QueueConfigurations
  * @see ApplicationClientProtocol#getQueueInfo(org.apache.hadoop.yarn.api.protocolrecords.GetQueueInfoRequest)
  */
 @Public
@@ -56,7 +58,8 @@ public abstract class QueueInfo {
       float maximumCapacity, float currentCapacity,
       List<QueueInfo> childQueues, List<ApplicationReport> applications,
       QueueState queueState, Set<String> accessibleNodeLabels,
-      String defaultNodeLabelExpression) {
+      String defaultNodeLabelExpression, QueueStatistics queueStatistics,
+      boolean preemptionDisabled) {
     QueueInfo queueInfo = Records.newRecord(QueueInfo.class);
     queueInfo.setQueueName(queueName);
     queueInfo.setCapacity(capacity);
@@ -67,6 +70,47 @@ public abstract class QueueInfo {
     queueInfo.setQueueState(queueState);
     queueInfo.setAccessibleNodeLabels(accessibleNodeLabels);
     queueInfo.setDefaultNodeLabelExpression(defaultNodeLabelExpression);
+    queueInfo.setQueueStatistics(queueStatistics);
+    queueInfo.setPreemptionDisabled(preemptionDisabled);
+    return queueInfo;
+  }
+
+  @Private
+  @Unstable
+  public static QueueInfo newInstance(String queueName, float capacity,
+      float maximumCapacity, float currentCapacity,
+      List<QueueInfo> childQueues, List<ApplicationReport> applications,
+      QueueState queueState, Set<String> accessibleNodeLabels,
+      String defaultNodeLabelExpression, QueueStatistics queueStatistics,
+      boolean preemptionDisabled,
+      Map<String, QueueConfigurations> queueConfigurations) {
+    QueueInfo queueInfo = QueueInfo.newInstance(queueName, capacity,
+        maximumCapacity, currentCapacity,
+        childQueues, applications,
+        queueState, accessibleNodeLabels,
+        defaultNodeLabelExpression, queueStatistics,
+        preemptionDisabled);
+    queueInfo.setQueueConfigurations(queueConfigurations);
+    return queueInfo;
+  }
+
+  @Private
+  @Unstable
+  public static QueueInfo newInstance(String queueName, float capacity,
+      float maximumCapacity, float currentCapacity,
+      List<QueueInfo> childQueues, List<ApplicationReport> applications,
+      QueueState queueState, Set<String> accessibleNodeLabels,
+      String defaultNodeLabelExpression, QueueStatistics queueStatistics,
+      boolean preemptionDisabled,
+      Map<String, QueueConfigurations> queueConfigurations,
+      boolean intraQueuePreemptionDisabled) {
+    QueueInfo queueInfo = QueueInfo.newInstance(queueName, capacity,
+        maximumCapacity, currentCapacity,
+        childQueues, applications,
+        queueState, accessibleNodeLabels,
+        defaultNodeLabelExpression, queueStatistics,
+        preemptionDisabled, queueConfigurations);
+    queueInfo.setIntraQueuePreemptionDisabled(intraQueuePreemptionDisabled);
     return queueInfo;
   }
 
@@ -185,4 +229,71 @@ public abstract class QueueInfo {
   @Stable
   public abstract void setDefaultNodeLabelExpression(
       String defaultLabelExpression);
+
+  /**
+   * Get the <code>queue stats</code> for the queue
+   *
+   * @return <code>queue stats</code> of the queue
+   */
+  @Public
+  @Unstable
+  public abstract QueueStatistics getQueueStatistics();
+
+  /**
+   * Set the queue statistics for the queue
+   * 
+   * @param queueStatistics
+   *          the queue statistics
+   */
+  @Public
+  @Unstable
+  public abstract void setQueueStatistics(QueueStatistics queueStatistics);
+
+  /**
+   * Get the <em>preemption status</em> of the queue.
+   * @return if property is not in proto, return null;
+   *        otherwise, return <em>preemption status</em> of the queue
+   */
+  @Public
+  @Stable
+  public abstract Boolean getPreemptionDisabled();
+
+  @Private
+  @Unstable
+  public abstract void setPreemptionDisabled(boolean preemptionDisabled);
+
+  /**
+   * Get the per-node-label queue configurations of the queue.
+   *
+   * @return the per-node-label queue configurations of the queue.
+   */
+  @Public
+  @Stable
+  public abstract Map<String, QueueConfigurations> getQueueConfigurations();
+
+  /**
+   * Set the per-node-label queue configurations for the queue.
+   *
+   * @param queueConfigurations
+   *          the queue configurations
+   */
+  @Private
+  @Unstable
+  public abstract void setQueueConfigurations(
+      Map<String, QueueConfigurations> queueConfigurations);
+
+
+  /**
+   * Get the intra-queue preemption status of the queue.
+   * @return if property is not in proto, return null;
+   *        otherwise, return intra-queue preemption status of the queue
+   */
+  @Public
+  @Stable
+  public abstract Boolean getIntraQueuePreemptionDisabled();
+
+  @Private
+  @Unstable
+  public abstract void setIntraQueuePreemptionDisabled(
+      boolean intraQueuePreemptionDisabled);
 }

@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.yarn.security;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 
 import org.apache.hadoop.conf.Configuration;
@@ -27,13 +29,17 @@ import org.apache.hadoop.security.HadoopKerberosName;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.hadoop.yarn.api.records.ExecutionType;
 import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.nodelabels.CommonNodeLabelsManager;
+import org.apache.hadoop.yarn.proto.YarnSecurityTokenProtos.YARNDelegationTokenIdentifierProto;
 import org.apache.hadoop.yarn.security.client.ClientToAMTokenIdentifier;
 import org.apache.hadoop.yarn.security.client.RMDelegationTokenIdentifier;
 import org.apache.hadoop.yarn.security.client.TimelineDelegationTokenIdentifier;
+import org.apache.hadoop.yarn.server.api.ContainerType;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -147,7 +153,7 @@ public class TestYARNTokenIdentifier {
     long creationTime = 1000;
     
     ContainerTokenIdentifier token = new ContainerTokenIdentifier(
-        containerID, hostName, appSubmitter, r, expiryTimeStamp, 
+        containerID, hostName, appSubmitter, r, expiryTimeStamp,
         masterKeyId, rmIdentifier, priority, creationTime);
     
     ContainerTokenIdentifier anotherToken = new ContainerTokenIdentifier();
@@ -198,6 +204,15 @@ public class TestYARNTokenIdentifier {
         anotherToken.getCreationTime(), creationTime);
     
     Assert.assertNull(anotherToken.getLogAggregationContext());
+
+    Assert.assertEquals(CommonNodeLabelsManager.NO_LABEL,
+        anotherToken.getNodeLabelExpression());
+
+    Assert.assertEquals(ContainerType.TASK,
+        anotherToken.getContainerType());
+
+    Assert.assertEquals(ExecutionType.GUARANTEED,
+        anotherToken.getExecutionType());
   }
   
   @Test
@@ -224,7 +239,7 @@ public class TestYARNTokenIdentifier {
     DataInputBuffer dib = new DataInputBuffer();
     dib.reset(tokenContent, tokenContent.length);
     anotherToken.readFields(dib);
-        
+    dib.close();
     // verify the whole record equals with original record
     Assert.assertEquals("Token is not the same after serialization " +
         "and deserialization.", token, anotherToken);
@@ -249,6 +264,32 @@ public class TestYARNTokenIdentifier {
     
     Assert.assertEquals("masterKeyId from proto is not the same with original token",
         anotherToken.getMasterKeyId(), masterKeyId);
+    
+    // Test getProto    
+    RMDelegationTokenIdentifier token1 = 
+        new RMDelegationTokenIdentifier(owner, renewer, realUser);
+    token1.setIssueDate(issueDate);
+    token1.setMaxDate(maxDate);
+    token1.setSequenceNumber(sequenceNumber);
+    token1.setMasterKeyId(masterKeyId);
+    YARNDelegationTokenIdentifierProto tokenProto = token1.getProto();
+    // Write token proto to stream
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    DataOutputStream out = new DataOutputStream(baos);
+    tokenProto.writeTo(out);
+
+    // Read token
+    byte[] tokenData = baos.toByteArray();
+    RMDelegationTokenIdentifier readToken = new RMDelegationTokenIdentifier();
+    DataInputBuffer db = new DataInputBuffer();
+    db.reset(tokenData, tokenData.length);
+    readToken.readFields(db);
+
+    // Verify if read token equals with original token
+    Assert.assertEquals("Token from getProto is not the same after " +
+        "serialization and deserialization.", token1, readToken);
+    db.close();
+    out.close();
   }
   
   @Test
@@ -316,6 +357,58 @@ public class TestYARNTokenIdentifier {
     TimelineDelegationTokenIdentifier token =
         new TimelineDelegationTokenIdentifier(owner, renewer, realUser);
     Assert.assertEquals(new Text("yarn"), token.getRenewer());
+  }
+
+  @Test
+  public void testAMContainerTokenIdentifier() throws IOException {
+    ContainerId containerID = ContainerId.newContainerId(
+        ApplicationAttemptId.newInstance(ApplicationId.newInstance(
+            1, 1), 1), 1);
+    String hostName = "host0";
+    String appSubmitter = "usr0";
+    Resource r = Resource.newInstance(1024, 1);
+    long expiryTimeStamp = 1000;
+    int masterKeyId = 1;
+    long rmIdentifier = 1;
+    Priority priority = Priority.newInstance(1);
+    long creationTime = 1000;
+
+    ContainerTokenIdentifier token =
+        new ContainerTokenIdentifier(containerID, hostName, appSubmitter, r,
+            expiryTimeStamp, masterKeyId, rmIdentifier, priority, creationTime,
+            null, CommonNodeLabelsManager.NO_LABEL, ContainerType.APPLICATION_MASTER);
+
+    ContainerTokenIdentifier anotherToken = new ContainerTokenIdentifier();
+
+    byte[] tokenContent = token.getBytes();
+    DataInputBuffer dib = new DataInputBuffer();
+    dib.reset(tokenContent, tokenContent.length);
+    anotherToken.readFields(dib);
+
+    Assert.assertEquals(ContainerType.APPLICATION_MASTER,
+        anotherToken.getContainerType());
+
+    Assert.assertEquals(ExecutionType.GUARANTEED,
+        anotherToken.getExecutionType());
+
+    token =
+        new ContainerTokenIdentifier(containerID, 0, hostName, appSubmitter, r,
+            expiryTimeStamp, masterKeyId, rmIdentifier, priority, creationTime,
+            null, CommonNodeLabelsManager.NO_LABEL, ContainerType.TASK,
+            ExecutionType.OPPORTUNISTIC);
+
+    anotherToken = new ContainerTokenIdentifier();
+
+    tokenContent = token.getBytes();
+    dib = new DataInputBuffer();
+    dib.reset(tokenContent, tokenContent.length);
+    anotherToken.readFields(dib);
+
+    Assert.assertEquals(ContainerType.TASK,
+        anotherToken.getContainerType());
+
+    Assert.assertEquals(ExecutionType.OPPORTUNISTIC,
+        anotherToken.getExecutionType());
   }
 
 }

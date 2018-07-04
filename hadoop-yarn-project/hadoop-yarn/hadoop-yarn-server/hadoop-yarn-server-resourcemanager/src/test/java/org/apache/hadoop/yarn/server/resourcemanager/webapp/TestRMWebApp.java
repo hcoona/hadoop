@@ -21,25 +21,37 @@ package org.apache.hadoop.yarn.server.resourcemanager.webapp;
 import static org.apache.hadoop.yarn.server.resourcemanager.MockNodes.newResource;
 import static org.apache.hadoop.yarn.webapp.Params.TITLE;
 import static org.junit.Assert.assertEquals;
+import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationsRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationsResponse;
+import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.api.records.ApplicationReport;
+import org.apache.hadoop.yarn.api.records.ApplicationResourceUsageReport;
 import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.NodeState;
+import org.apache.hadoop.yarn.api.records.Token;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.exceptions.YarnException;
+import org.apache.hadoop.yarn.server.resourcemanager.ClientRMService;
 import org.apache.hadoop.yarn.server.resourcemanager.MockNodes;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContextImpl;
 import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager;
 import org.apache.hadoop.yarn.server.resourcemanager.applicationsmanager.MockAsm;
-import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.MemoryRMNodeLabelsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.NullRMNodeLabelsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNode;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
@@ -54,6 +66,7 @@ import org.apache.hadoop.yarn.util.StringHelper;
 import org.apache.hadoop.yarn.webapp.WebApps;
 import org.apache.hadoop.yarn.webapp.YarnWebParams;
 import org.apache.hadoop.yarn.webapp.test.WebAppTests;
+import org.junit.Assert;
 import org.junit.Test;
 
 import com.google.common.collect.Maps;
@@ -87,7 +100,8 @@ public class TestRMWebApp {
       @Override
       public void configure(Binder binder) {
         try {
-          binder.bind(ResourceManager.class).toInstance(mockRm(3, 1, 2, 8*GiB));
+          ResourceManager mockRm = mockRm(3, 1, 2, 8*GiB);
+          binder.bind(ResourceManager.class).toInstance(mockRm);
         } catch (IOException e) {
           throw new IllegalStateException(e);
         }
@@ -104,6 +118,10 @@ public class TestRMWebApp {
         YarnApplicationState.RUNNING.toString()));
     rmViewInstance.render();
     WebAppTests.flushOutput(injector);
+    Map<String, String> moreParams =
+        rmViewInstance.context().requestContext().moreParams();
+    String appsTableColumnsMeta = moreParams.get("ui.dataTables.apps.init");
+    Assert.assertTrue(appsTableColumnsMeta.indexOf("natural") != -1);
   }
 
   @Test public void testNodesPage() {
@@ -158,10 +176,10 @@ public class TestRMWebApp {
     
     final List<RMNode> deactivatedNodes =
         MockNodes.deactivatedNodes(racks, numNodes, newResource(mbsPerNode));
-    final ConcurrentMap<String, RMNode> deactivatedNodesMap =
+    final ConcurrentMap<NodeId, RMNode> deactivatedNodesMap =
         Maps.newConcurrentMap();
     for (RMNode node : deactivatedNodes) {
-      deactivatedNodesMap.put(node.getHostName(), node);
+      deactivatedNodesMap.put(node.getNodeID(), node);
     }
 
     RMContextImpl rmContext = new RMContextImpl(null, null, null, null,
@@ -171,7 +189,7 @@ public class TestRMWebApp {
          return applicationsMaps;
        }
        @Override
-       public ConcurrentMap<String, RMNode> getInactiveRMNodes() {
+       public ConcurrentMap<NodeId, RMNode> getInactiveRMNodes() {
          return deactivatedNodesMap;
        }
        @Override
@@ -179,7 +197,8 @@ public class TestRMWebApp {
          return nodesMap;
        }
      }; 
-    rmContext.setNodeLabelManager(new MemoryRMNodeLabelsManager());
+    rmContext.setNodeLabelManager(new NullRMNodeLabelsManager());
+    rmContext.setYarnConfiguration(new YarnConfiguration());
     return rmContext;
   }
 
@@ -194,9 +213,11 @@ public class TestRMWebApp {
     ResourceManager rm = mock(ResourceManager.class);
     ResourceScheduler rs = mockCapacityScheduler();
     ApplicationACLsManager aclMgr = mockAppACLsManager();
+    ClientRMService clientRMService = mockClientRMService(rmContext);
     when(rm.getResourceScheduler()).thenReturn(rs);
     when(rm.getRMContext()).thenReturn(rmContext);
     when(rm.getApplicationACLsManager()).thenReturn(aclMgr);
+    when(rm.getClientRMService()).thenReturn(clientRMService);
     return rm;
   }
 
@@ -206,12 +227,15 @@ public class TestRMWebApp {
     setupQueueConfiguration(conf);
 
     CapacityScheduler cs = new CapacityScheduler();
-    cs.setConf(new YarnConfiguration());
+    YarnConfiguration yarnConf = new YarnConfiguration();
+    cs.setConf(yarnConf);
     RMContext rmContext = new RMContextImpl(null, null, null, null, null,
         null, new RMContainerTokenSecretManager(conf),
         new NMTokenSecretManagerInRM(conf),
         new ClientToAMTokenSecretManagerInRM(), null);
-    rmContext.setNodeLabelManager(new MemoryRMNodeLabelsManager());
+    RMNodeLabelsManager labelManager = new NullRMNodeLabelsManager();
+    labelManager.init(yarnConf);
+    rmContext.setNodeLabelManager(labelManager);
     cs.setRMContext(rmContext);
     cs.init(conf);
     return cs;
@@ -221,6 +245,35 @@ public class TestRMWebApp {
     Configuration conf = new Configuration();
     return new ApplicationACLsManager(conf);
   }
+
+  public static ClientRMService mockClientRMService(RMContext rmContext) {
+    ClientRMService clientRMService = mock(ClientRMService.class);
+    List<ApplicationReport> appReports = new ArrayList<ApplicationReport>();
+    for (RMApp app : rmContext.getRMApps().values()) {
+      ApplicationReport appReport =
+          ApplicationReport.newInstance(
+              app.getApplicationId(), (ApplicationAttemptId) null,
+              app.getUser(), app.getQueue(),
+              app.getName(), (String) null, 0, (Token) null,
+              app.createApplicationState(),
+              app.getDiagnostics().toString(), (String) null,
+              app.getStartTime(), app.getFinishTime(),
+              app.getFinalApplicationStatus(),
+              (ApplicationResourceUsageReport) null, app.getTrackingUrl(),
+              app.getProgress(), app.getApplicationType(), (Token) null);
+      appReports.add(appReport);
+    }
+    GetApplicationsResponse response = mock(GetApplicationsResponse.class);
+    when(response.getApplicationList()).thenReturn(appReports);
+    try {
+      when(clientRMService.getApplications(any(GetApplicationsRequest.class)))
+          .thenReturn(response);
+    } catch (YarnException e) {
+      Assert.fail("Exception is not expected.");
+    }
+    return clientRMService;
+  }
+
 
   static void setupQueueConfiguration(CapacitySchedulerConfiguration conf) {
     // Define top-level queues

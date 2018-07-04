@@ -19,11 +19,17 @@
 package org.apache.hadoop.yarn.server.api.protocolrecords;
 
 import java.nio.ByteBuffer;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.hadoop.yarn.api.protocolrecords.SignalContainerRequest;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.server.api.records.AppCollectorData;
+import org.apache.hadoop.yarn.server.api.records.ContainerQueuingLimit;
 import org.apache.hadoop.yarn.server.api.records.MasterKey;
 import org.apache.hadoop.yarn.server.api.records.NodeAction;
 
@@ -35,6 +41,11 @@ public interface NodeHeartbeatResponse {
   List<ContainerId> getContainersToBeRemovedFromNM();
 
   List<ApplicationId> getApplicationsToCleanup();
+
+  // This tells NM the collectors' address info of related apps
+  Map<ApplicationId, AppCollectorData> getAppCollectors();
+  void setAppCollectors(
+      Map<ApplicationId, AppCollectorData> appCollectorsMap);
 
   void setResponseId(int responseId);
   void setNodeAction(NodeAction action);
@@ -54,6 +65,8 @@ public interface NodeHeartbeatResponse {
   
   void addAllApplicationsToCleanup(List<ApplicationId> applications);
 
+  List<SignalContainerRequest> getContainersToSignalList();
+  void addAllContainersToSignal(List<SignalContainerRequest> containers);
   long getNextHeartBeatInterval();
   void setNextHeartBeatInterval(long nextHeartBeatInterval);
   
@@ -67,4 +80,26 @@ public interface NodeHeartbeatResponse {
 
   void setSystemCredentialsForApps(
       Map<ApplicationId, ByteBuffer> systemCredentials);
+  
+  public abstract boolean getAreNodeLabelsAcceptedByRM();
+
+  public abstract void setAreNodeLabelsAcceptedByRM(
+      boolean areNodeLabelsAcceptedByRM);
+
+  public abstract Resource getResource();
+
+  public abstract void setResource(Resource resource);
+
+  public abstract List<Container> getContainersToUpdate();
+
+  public abstract void addAllContainersToUpdate(
+      Collection<Container> containersToUpdate);
+
+  public abstract List<Container> getContainersToDecrease();
+
+  public abstract void addAllContainersToDecrease(
+      Collection<Container> containersToDecrease);
+
+  ContainerQueuingLimit getContainerQueuingLimit();
+  void setContainerQueuingLimit(ContainerQueuingLimit containerQueuingLimit);
 }

@@ -71,7 +71,7 @@ public class ComputeFairShares {
    * fair shares. The min and max shares and of the Schedulables are assumed to
    * be set beforehand. We compute the fairest possible allocation of shares to
    * the Schedulables that respects their min and max shares.
-   * 
+   * <p>
    * To understand what this method does, we must first define what weighted
    * fair sharing means in the presence of min and max shares. If there
    * were no minimum or maximum shares, then weighted fair sharing would be
@@ -79,30 +79,31 @@ public class ComputeFairShares {
    * Schedulable and all slots were assigned. Minimum and maximum shares add a
    * further twist - Some Schedulables may have a min share higher than their
    * assigned share or a max share lower than their assigned share.
-   * 
+   * <p>
    * To deal with these possibilities, we define an assignment of slots as being
    * fair if there exists a ratio R such that: Schedulables S where S.minShare
-   * > R * S.weight are given share S.minShare - Schedulables S where S.maxShare
-   * < R * S.weight are given S.maxShare - All other Schedulables S are
-   * assigned share R * S.weight - The sum of all the shares is totalSlots.
-   * 
+   * {@literal >} R * S.weight are given share S.minShare - Schedulables S
+   * where S.maxShare {@literal <} R * S.weight are given S.maxShare -
+   * All other Schedulables S are assigned share R * S.weight -
+   * The sum of all the shares is totalSlots.
+   * <p>
    * We call R the weight-to-slots ratio because it converts a Schedulable's
    * weight to the number of slots it is assigned.
-   * 
+   * <p>
    * We compute a fair allocation by finding a suitable weight-to-slot ratio R.
    * To do this, we use binary search. Given a ratio R, we compute the number of
    * slots that would be used in total with this ratio (the sum of the shares
    * computed using the conditions above). If this number of slots is less than
    * totalSlots, then R is too small and more slots could be assigned. If the
    * number of slots is more than totalSlots, then R is too large.
-   * 
+   * <p>
    * We begin the binary search with a lower bound on R of 0 (which means that
    * all Schedulables are only given their minShare) and an upper bound computed
    * to be large enough that too many slots are given (by doubling R until we
    * use more than totalResources resources). The helper method
    * resourceUsedWithWeightToResourceRatio computes the total resources used with a
    * given value of R.
-   * 
+   * <p>
    * The running time of this algorithm is linear in the number of Schedulables,
    * because resourceUsedWithWeightToResourceRatio is linear-time and the number of
    * iterations of binary search is a constant (dependent on desired precision).
@@ -123,15 +124,15 @@ public class ComputeFairShares {
     // have met all Schedulables' max shares.
     int totalMaxShare = 0;
     for (Schedulable sched : schedulables) {
-      int maxShare = getResourceValue(sched.getMaxShare(), type);
-      totalMaxShare = (int) Math.min((long)maxShare + (long)totalMaxShare,
+      long maxShare = getResourceValue(sched.getMaxShare(), type);
+      totalMaxShare = (int) Math.min(maxShare + (long)totalMaxShare,
           Integer.MAX_VALUE);
       if (totalMaxShare == Integer.MAX_VALUE) {
         break;
       }
     }
 
-    int totalResource = Math.max((getResourceValue(totalResources, type) -
+    long totalResource = Math.max((getResourceValue(totalResources, type) -
         takenResources), 0);
     totalResource = Math.min(totalMaxShare, totalResource);
 
@@ -206,7 +207,7 @@ public class ComputeFairShares {
     int totalResource = 0;
 
     for (Schedulable sched : schedulables) {
-      int fixedShare = getFairShareIfFixed(sched, isSteadyShare, type);
+      long fixedShare = getFairShareIfFixed(sched, isSteadyShare, type);
       if (fixedShare < 0) {
         nonFixedSchedulables.add(sched);
       } else {
@@ -228,7 +229,7 @@ public class ComputeFairShares {
    * The fairshare is fixed if either the maxShare is 0, weight is 0,
    * or the Schedulable is not active for instantaneous fairshare.
    */
-  private static int getFairShareIfFixed(Schedulable sched,
+  private static long getFairShareIfFixed(Schedulable sched,
       boolean isSteadyShare, ResourceType type) {
 
     // Check if maxShare is 0
@@ -244,17 +245,17 @@ public class ComputeFairShares {
 
     // Check if weight is 0
     if (sched.getWeights().getWeight(type) <= 0) {
-      int minShare = getResourceValue(sched.getMinShare(), type);
+      long minShare = getResourceValue(sched.getMinShare(), type);
       return (minShare <= 0) ? 0 : minShare;
     }
 
     return -1;
   }
 
-  private static int getResourceValue(Resource resource, ResourceType type) {
+  private static long getResourceValue(Resource resource, ResourceType type) {
     switch (type) {
     case MEMORY:
-      return resource.getMemory();
+      return resource.getMemorySize();
     case CPU:
       return resource.getVirtualCores();
     default:
@@ -262,13 +263,13 @@ public class ComputeFairShares {
     }
   }
   
-  private static void setResourceValue(int val, Resource resource, ResourceType type) {
+  private static void setResourceValue(long val, Resource resource, ResourceType type) {
     switch (type) {
     case MEMORY:
-      resource.setMemory(val);
+      resource.setMemorySize(val);
       break;
     case CPU:
-      resource.setVirtualCores(val);
+      resource.setVirtualCores((int)val);
       break;
     default:
       throw new IllegalArgumentException("Invalid resource");

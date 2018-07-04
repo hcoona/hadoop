@@ -20,45 +20,69 @@ package org.apache.hadoop.yarn.server.api.protocolrecords.impl.pb;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.hadoop.security.proto.SecurityProtos.TokenProto;
+import org.apache.hadoop.yarn.api.protocolrecords.SignalContainerRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.impl.pb.SignalContainerRequestPBImpl;
+import org.apache.hadoop.yarn.server.api.records.AppCollectorData;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.api.records.Token;
 import org.apache.hadoop.yarn.api.records.impl.pb.ApplicationIdPBImpl;
 import org.apache.hadoop.yarn.api.records.impl.pb.ContainerIdPBImpl;
+import org.apache.hadoop.yarn.api.records.impl.pb.ContainerPBImpl;
 import org.apache.hadoop.yarn.api.records.impl.pb.ProtoBase;
 import org.apache.hadoop.yarn.api.records.impl.pb.ProtoUtils;
+import org.apache.hadoop.yarn.api.records.impl.pb.ResourcePBImpl;
+import org.apache.hadoop.yarn.api.records.impl.pb.TokenPBImpl;
 import org.apache.hadoop.yarn.proto.YarnProtos.ApplicationIdProto;
 import org.apache.hadoop.yarn.proto.YarnProtos.ContainerIdProto;
+import org.apache.hadoop.yarn.proto.YarnProtos.ContainerProto;
+import org.apache.hadoop.yarn.proto.YarnProtos.ResourceProto;
+import org.apache.hadoop.yarn.proto.YarnServerCommonServiceProtos.AppCollectorDataProto;
+import org.apache.hadoop.yarn.proto.YarnServerCommonServiceProtos.ContainerQueuingLimitProto;
+import org.apache.hadoop.yarn.proto.YarnServiceProtos.SignalContainerRequestProto;
 import org.apache.hadoop.yarn.proto.YarnServerCommonProtos.MasterKeyProto;
 import org.apache.hadoop.yarn.proto.YarnServerCommonProtos.NodeActionProto;
 import org.apache.hadoop.yarn.proto.YarnServerCommonServiceProtos.NodeHeartbeatResponseProto;
 import org.apache.hadoop.yarn.proto.YarnServerCommonServiceProtos.NodeHeartbeatResponseProtoOrBuilder;
 import org.apache.hadoop.yarn.proto.YarnServerCommonServiceProtos.SystemCredentialsForAppsProto;
 import org.apache.hadoop.yarn.server.api.protocolrecords.NodeHeartbeatResponse;
+import org.apache.hadoop.yarn.server.api.records.ContainerQueuingLimit;
 import org.apache.hadoop.yarn.server.api.records.MasterKey;
 import org.apache.hadoop.yarn.server.api.records.NodeAction;
+import org.apache.hadoop.yarn.server.api.records.impl.pb.ContainerQueuingLimitPBImpl;
 import org.apache.hadoop.yarn.server.api.records.impl.pb.MasterKeyPBImpl;
 
 
-    
 public class NodeHeartbeatResponsePBImpl extends
     ProtoBase<NodeHeartbeatResponseProto> implements NodeHeartbeatResponse {
   NodeHeartbeatResponseProto proto = NodeHeartbeatResponseProto.getDefaultInstance();
   NodeHeartbeatResponseProto.Builder builder = null;
   boolean viaProto = false;
-  
+
   private List<ContainerId> containersToCleanup = null;
   private List<ContainerId> containersToBeRemovedFromNM = null;
   private List<ApplicationId> applicationsToCleanup = null;
   private Map<ApplicationId, ByteBuffer> systemCredentials = null;
+  private Resource resource = null;
+  private Map<ApplicationId, AppCollectorData> appCollectorsMap = null;
 
   private MasterKey containerTokenMasterKey = null;
   private MasterKey nmTokenMasterKey = null;
-  
+  private ContainerQueuingLimit containerQueuingLimit = null;
+  private List<Container> containersToUpdate = null;
+  // NOTE: This should be removed in 3.x
+  private List<Container> containersToDecrease = null;
+  private List<SignalContainerRequest> containersToSignal = null;
+
   public NodeHeartbeatResponsePBImpl() {
     builder = NodeHeartbeatResponseProto.newBuilder();
   }
@@ -67,7 +91,7 @@ public class NodeHeartbeatResponsePBImpl extends
     this.proto = proto;
     viaProto = true;
   }
-  
+
   public NodeHeartbeatResponseProto getProto() {
     mergeLocalToProto();
     proto = viaProto ? proto : builder.build();
@@ -93,8 +117,27 @@ public class NodeHeartbeatResponsePBImpl extends
       builder.setNmTokenMasterKey(
           convertToProtoFormat(this.nmTokenMasterKey));
     }
+    if (this.containerQueuingLimit != null) {
+      builder.setContainerQueuingLimit(
+          convertToProtoFormat(this.containerQueuingLimit));
+    }
     if (this.systemCredentials != null) {
       addSystemCredentialsToProto();
+    }
+    if (this.containersToUpdate != null) {
+      addContainersToUpdateToProto();
+    }
+    if (this.containersToDecrease != null) {
+      addContainersToDecreaseToProto();
+    }
+    if (this.containersToSignal != null) {
+      addContainersToSignalToProto();
+    }
+    if (this.resource != null) {
+      builder.setResource(convertToProtoFormat(this.resource));
+    }
+    if (this.appCollectorsMap != null) {
+      addAppCollectorsMapToProto();
     }
   }
 
@@ -104,7 +147,28 @@ public class NodeHeartbeatResponsePBImpl extends
     for (Map.Entry<ApplicationId, ByteBuffer> entry : systemCredentials.entrySet()) {
       builder.addSystemCredentialsForApps(SystemCredentialsForAppsProto.newBuilder()
         .setAppId(convertToProtoFormat(entry.getKey()))
-        .setCredentialsForApp(ProtoUtils.convertToProtoFormat(entry.getValue())));
+        .setCredentialsForApp(ProtoUtils.convertToProtoFormat(
+            entry.getValue().duplicate())));
+    }
+  }
+
+  private void addAppCollectorsMapToProto() {
+    maybeInitBuilder();
+    builder.clearAppCollectors();
+    for (Map.Entry<ApplicationId, AppCollectorData> entry
+        : appCollectorsMap.entrySet()) {
+      AppCollectorData data = entry.getValue();
+      AppCollectorDataProto.Builder appCollectorDataBuilder =
+          AppCollectorDataProto.newBuilder()
+              .setAppId(convertToProtoFormat(entry.getKey()))
+              .setAppCollectorAddr(data.getCollectorAddr())
+              .setRmIdentifier(data.getRMIdentifier())
+              .setVersion(data.getVersion());
+      if (data.getCollectorToken() != null) {
+        appCollectorDataBuilder.setAppCollectorToken(
+            convertToProtoFormat(data.getCollectorToken()));
+      }
+      builder.addAppCollectors(appCollectorDataBuilder);
     }
   }
 
@@ -122,8 +186,8 @@ public class NodeHeartbeatResponsePBImpl extends
     }
     viaProto = false;
   }
-    
-  
+
+
   @Override
   public int getResponseId() {
     NodeHeartbeatResponseProtoOrBuilder p = viaProto ? proto : builder;
@@ -134,6 +198,28 @@ public class NodeHeartbeatResponsePBImpl extends
   public void setResponseId(int responseId) {
     maybeInitBuilder();
     builder.setResponseId((responseId));
+  }
+
+  @Override
+  public Resource getResource() {
+    NodeHeartbeatResponseProtoOrBuilder p = viaProto ? proto : builder;
+    if (this.resource != null) {
+      return this.resource;
+    }
+    if (!p.hasResource()) {
+      return null;
+    }
+    this.resource = convertFromProtoFormat(p.getResource());
+    return this.resource;
+  }
+
+  @Override
+  public void setResource(Resource resource) {
+    maybeInitBuilder();
+    if (resource == null) {
+      builder.clearResource();
+    }
+    this.resource = resource;
   }
 
   @Override
@@ -178,6 +264,30 @@ public class NodeHeartbeatResponsePBImpl extends
     if (masterKey == null)
       builder.clearNmTokenMasterKey();
     this.nmTokenMasterKey = masterKey;
+  }
+
+  @Override
+  public ContainerQueuingLimit getContainerQueuingLimit() {
+    NodeHeartbeatResponseProtoOrBuilder p = viaProto ? proto : builder;
+    if (this.containerQueuingLimit != null) {
+      return this.containerQueuingLimit;
+    }
+    if (!p.hasContainerQueuingLimit()) {
+      return null;
+    }
+    this.containerQueuingLimit =
+        convertFromProtoFormat(p.getContainerQueuingLimit());
+    return this.containerQueuingLimit;
+  }
+
+  @Override
+  public void setContainerQueuingLimit(ContainerQueuingLimit
+      containerQueuingLimit) {
+    maybeInitBuilder();
+    if (containerQueuingLimit == null) {
+      builder.clearContainerQueuingLimit();
+    }
+    this.containerQueuingLimit = containerQueuingLimit;
   }
 
   @Override
@@ -407,6 +517,124 @@ public class NodeHeartbeatResponsePBImpl extends
     builder.addAllApplicationsToCleanup(iterable);
   }
 
+  private void initContainersToUpdate() {
+    if (this.containersToUpdate != null) {
+      return;
+    }
+    NodeHeartbeatResponseProtoOrBuilder p = viaProto ? proto : builder;
+    List<ContainerProto> list = p.getContainersToUpdateList();
+    this.containersToUpdate = new ArrayList<>();
+
+    for (ContainerProto c : list) {
+      this.containersToUpdate.add(convertFromProtoFormat(c));
+    }
+  }
+
+  @Override
+  public List<Container> getContainersToUpdate() {
+    initContainersToUpdate();
+    return this.containersToUpdate;
+  }
+
+  @Override
+  public void addAllContainersToUpdate(
+      final Collection<Container> containersToBeUpdated) {
+    if (containersToBeUpdated == null) {
+      return;
+    }
+    initContainersToUpdate();
+    this.containersToUpdate.addAll(containersToBeUpdated);
+  }
+
+  private void addContainersToUpdateToProto() {
+    maybeInitBuilder();
+    builder.clearContainersToUpdate();
+    if (this.containersToUpdate == null) {
+      return;
+    }
+    Iterable<ContainerProto> iterable = new
+        Iterable<ContainerProto>() {
+      @Override
+      public Iterator<ContainerProto> iterator() {
+        return new Iterator<ContainerProto>() {
+          private Iterator<Container> iter = containersToUpdate.iterator();
+          @Override
+          public boolean hasNext() {
+            return iter.hasNext();
+          }
+          @Override
+          public ContainerProto next() {
+            return convertToProtoFormat(iter.next());
+          }
+          @Override
+          public void remove() {
+            throw new UnsupportedOperationException();
+          }
+        };
+      }
+    };
+    builder.addAllContainersToUpdate(iterable);
+  }
+
+  private void initContainersToDecrease() {
+    if (this.containersToDecrease != null) {
+      return;
+    }
+    NodeHeartbeatResponseProtoOrBuilder p = viaProto ? proto : builder;
+    List<ContainerProto> list = p.getContainersToDecreaseList();
+    this.containersToDecrease = new ArrayList<>();
+
+    for (ContainerProto c : list) {
+      this.containersToDecrease.add(convertFromProtoFormat(c));
+    }
+  }
+
+  @Override
+  public List<Container> getContainersToDecrease() {
+    initContainersToDecrease();
+    return this.containersToDecrease;
+  }
+
+  @Override
+  public void addAllContainersToDecrease(
+      final Collection<Container> containersToDecrease) {
+    if (containersToDecrease == null) {
+      return;
+    }
+    initContainersToDecrease();
+    this.containersToDecrease.addAll(containersToDecrease);
+  }
+
+  private void addContainersToDecreaseToProto() {
+    maybeInitBuilder();
+    builder.clearContainersToDecrease();
+    if (this.containersToDecrease == null) {
+      return;
+    }
+
+    Iterable<ContainerProto> iterable = new
+        Iterable<ContainerProto>() {
+      @Override
+      public Iterator<ContainerProto> iterator() {
+        return new Iterator<ContainerProto>() {
+          private Iterator<Container> iter = containersToDecrease.iterator();
+          @Override
+          public boolean hasNext() {
+            return iter.hasNext();
+          }
+          @Override
+          public ContainerProto next() {
+            return convertToProtoFormat(iter.next());
+          }
+          @Override
+          public void remove() {
+            throw new UnsupportedOperationException();
+          }
+        };
+      }
+    };
+    builder.addAllContainersToDecrease(iterable);
+  }
 
   @Override
   public Map<ApplicationId, ByteBuffer> getSystemCredentialsForApps() {
@@ -415,6 +643,15 @@ public class NodeHeartbeatResponsePBImpl extends
     }
     initSystemCredentials();
     return systemCredentials;
+  }
+
+  @Override
+  public Map<ApplicationId, AppCollectorData> getAppCollectors() {
+    if (this.appCollectorsMap != null) {
+      return this.appCollectorsMap;
+    }
+    initAppCollectorsMap();
+    return appCollectorsMap;
   }
 
   private void initSystemCredentials() {
@@ -428,6 +665,25 @@ public class NodeHeartbeatResponsePBImpl extends
     }
   }
 
+  private void initAppCollectorsMap() {
+    NodeHeartbeatResponseProtoOrBuilder p = viaProto ? proto : builder;
+    List<AppCollectorDataProto> list = p.getAppCollectorsList();
+    if (!list.isEmpty()) {
+      this.appCollectorsMap = new HashMap<>();
+      for (AppCollectorDataProto c : list) {
+        ApplicationId appId = convertFromProtoFormat(c.getAppId());
+        Token collectorToken = null;
+        if (c.hasAppCollectorToken()){
+          collectorToken = convertFromProtoFormat(c.getAppCollectorToken());
+        }
+        AppCollectorData data = AppCollectorData.newInstance(appId,
+            c.getAppCollectorAddr(), c.getRmIdentifier(), c.getVersion(),
+            collectorToken);
+        this.appCollectorsMap.put(appId, data);
+      }
+    }
+  }
+
   @Override
   public void setSystemCredentialsForApps(
       Map<ApplicationId, ByteBuffer> systemCredentials) {
@@ -437,6 +693,17 @@ public class NodeHeartbeatResponsePBImpl extends
     maybeInitBuilder();
     this.systemCredentials = new HashMap<ApplicationId, ByteBuffer>();
     this.systemCredentials.putAll(systemCredentials);
+  }
+
+  @Override
+  public void setAppCollectors(
+      Map<ApplicationId, AppCollectorData> appCollectors) {
+    if (appCollectors == null || appCollectors.isEmpty()) {
+      return;
+    }
+    maybeInitBuilder();
+    this.appCollectorsMap = new HashMap<>();
+    this.appCollectorsMap.putAll(appCollectors);
   }
 
   @Override
@@ -457,6 +724,14 @@ public class NodeHeartbeatResponsePBImpl extends
 
   private ContainerIdProto convertToProtoFormat(ContainerId t) {
     return ((ContainerIdPBImpl) t).getProto();
+  }
+
+  private ResourcePBImpl convertFromProtoFormat(ResourceProto p) {
+    return new ResourcePBImpl(p);
+  }
+
+  private ResourceProto convertToProtoFormat(Resource t) {
+    return ProtoUtils.convertToProtoFormat(t);
   }
 
   private ApplicationIdPBImpl convertFromProtoFormat(ApplicationIdProto p) {
@@ -481,6 +756,115 @@ public class NodeHeartbeatResponsePBImpl extends
 
   private MasterKeyProto convertToProtoFormat(MasterKey t) {
     return ((MasterKeyPBImpl) t).getProto();
+  }
+
+  private ContainerPBImpl convertFromProtoFormat(ContainerProto p) {
+    return new ContainerPBImpl(p);
+  }
+
+  private ContainerProto convertToProtoFormat(Container t) {
+    return ((ContainerPBImpl) t).getProto();
+  }
+
+  @Override
+  public boolean getAreNodeLabelsAcceptedByRM() {
+    NodeHeartbeatResponseProtoOrBuilder p =
+        this.viaProto ? this.proto : this.builder;
+    return p.getAreNodeLabelsAcceptedByRM();
+  }
+
+  @Override
+  public void setAreNodeLabelsAcceptedByRM(boolean areNodeLabelsAcceptedByRM) {
+    maybeInitBuilder();
+    this.builder.setAreNodeLabelsAcceptedByRM(areNodeLabelsAcceptedByRM);
+  }
+
+  @Override
+  public List<SignalContainerRequest> getContainersToSignalList() {
+    initContainersToSignal();
+    return this.containersToSignal;
+  }
+
+  private void initContainersToSignal() {
+    if (this.containersToSignal != null) {
+      return;
+    }
+    NodeHeartbeatResponseProtoOrBuilder p = viaProto ? proto : builder;
+    List<SignalContainerRequestProto> list = p.getContainersToSignalList();
+    this.containersToSignal = new ArrayList<SignalContainerRequest>();
+
+    for (SignalContainerRequestProto c : list) {
+      this.containersToSignal.add(convertFromProtoFormat(c));
+    }
+  }
+
+  @Override
+  public void addAllContainersToSignal(
+      final List<SignalContainerRequest> containersToSignal) {
+    if (containersToSignal == null)
+      return;
+    initContainersToSignal();
+    this.containersToSignal.addAll(containersToSignal);
+  }
+
+  private void addContainersToSignalToProto() {
+    maybeInitBuilder();
+    builder.clearContainersToSignal();
+    if (containersToSignal == null)
+      return;
+
+    Iterable<SignalContainerRequestProto> iterable =
+        new Iterable<SignalContainerRequestProto>() {
+          @Override
+          public Iterator<SignalContainerRequestProto> iterator() {
+            return new Iterator<SignalContainerRequestProto>() {
+              Iterator<SignalContainerRequest> iter = containersToSignal.iterator();
+              @Override
+              public boolean hasNext() {
+                return iter.hasNext();
+              }
+
+              @Override
+              public SignalContainerRequestProto next() {
+                return convertToProtoFormat(iter.next());
+              }
+
+              @Override
+              public void remove() {
+                throw new UnsupportedOperationException();
+              }
+            };
+          }
+        };
+    builder.addAllContainersToSignal(iterable);
+  }
+
+  private ContainerQueuingLimit convertFromProtoFormat(
+      ContainerQueuingLimitProto p) {
+    return new ContainerQueuingLimitPBImpl(p);
+  }
+
+  private ContainerQueuingLimitProto convertToProtoFormat(
+      ContainerQueuingLimit c) {
+    return ((ContainerQueuingLimitPBImpl)c).getProto();
+  }
+
+  private SignalContainerRequestPBImpl convertFromProtoFormat(
+      SignalContainerRequestProto p) {
+    return new SignalContainerRequestPBImpl(p);
+  }
+
+  private SignalContainerRequestProto convertToProtoFormat(
+      SignalContainerRequest t) {
+    return ((SignalContainerRequestPBImpl)t).getProto();
+  }
+
+  private TokenProto convertToProtoFormat(Token t) {
+    return ((TokenPBImpl) t).getProto();
+  }
+
+  private TokenPBImpl convertFromProtoFormat(TokenProto p) {
+    return new TokenPBImpl(p);
   }
 }
 

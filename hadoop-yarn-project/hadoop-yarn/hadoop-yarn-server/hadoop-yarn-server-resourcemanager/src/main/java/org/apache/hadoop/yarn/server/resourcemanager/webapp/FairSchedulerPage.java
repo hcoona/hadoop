@@ -22,11 +22,13 @@ import static org.apache.hadoop.yarn.util.StringHelper.join;
 
 import java.util.Collection;
 
+import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.FairSchedulerInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.FairSchedulerLeafQueueInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.FairSchedulerQueueInfo;
+import org.apache.hadoop.yarn.server.webapp.WebPageUtils;
 import org.apache.hadoop.yarn.webapp.ResponseInfo;
 import org.apache.hadoop.yarn.webapp.SubView;
 import org.apache.hadoop.yarn.webapp.hamlet.Hamlet;
@@ -44,10 +46,14 @@ public class FairSchedulerPage extends RmView {
   static final float Q_MAX_WIDTH = 0.8f;
   static final float Q_STATS_POS = Q_MAX_WIDTH + 0.05f;
   static final String Q_END = "left:101%";
-  static final String Q_GIVEN = "left:0%;background:none;border:1px dashed rgba(0,0,0,0.25)";
-  static final String Q_OVER = "background:rgba(255, 140, 0, 0.8)";
-  static final String Q_UNDER = "background:rgba(50, 205, 50, 0.8)";
-  
+  static final String Q_GIVEN =
+      "left:0%;background:none;border:1px solid #000000";
+  static final String Q_INSTANTANEOUS_FS =
+      "left:0%;background:none;border:1px dashed #000000";
+  static final String Q_OVER = "background:#FFA333";
+  static final String Q_UNDER = "background:#5BD75B";
+  static final String STEADY_FAIR_SHARE = "Steady Fair Share";
+  static final String INSTANTANEOUS_FAIR_SHARE = "Instantaneous Fair Share";
   @RequestScoped
   static class FSQInfo {
     FairSchedulerQueueInfo qinfo;
@@ -65,16 +71,21 @@ public class FairSchedulerPage extends RmView {
     protected void render(Block html) {
       ResponseInfo ri = info("\'" + qinfo.getQueueName() + "\' Queue Status").
           _("Used Resources:", qinfo.getUsedResources().toString()).
+          _("Demand Resources:", qinfo.getDemandResources().toString()).
+          _("AM Used Resources:", qinfo.getAMUsedResources().toString()).
+          _("AM Max Resources:", qinfo.getAMMaxResources().toString()).
           _("Num Active Applications:", qinfo.getNumActiveApplications()).
           _("Num Pending Applications:", qinfo.getNumPendingApplications()).
           _("Min Resources:", qinfo.getMinResources().toString()).
-          _("Max Resources:", qinfo.getMaxResources().toString());
+          _("Max Resources:", qinfo.getMaxResources().toString()).
+          _("Reserved Resources:", qinfo.getReservedResources().toString());
       int maxApps = qinfo.getMaxApplications();
       if (maxApps < Integer.MAX_VALUE) {
           ri._("Max Running Applications:", qinfo.getMaxApplications());
       }
-      ri._("Fair Share:", qinfo.getFairShare().toString());
-
+      ri._(STEADY_FAIR_SHARE + ":", qinfo.getSteadyFairShare().toString());
+      ri._(INSTANTANEOUS_FAIR_SHARE + ":", qinfo.getFairShare().toString());
+      ri._("Preemptable:", qinfo.isPreemptable());
       html._(InfoBlock.class);
 
       // clear the info contents so this queue's info doesn't accumulate into another queue's info
@@ -82,6 +93,34 @@ public class FairSchedulerPage extends RmView {
     }
   }
   
+  static class ParentQueueBlock extends HtmlBlock {
+	    final FairSchedulerQueueInfo qinfo;
+
+    @Inject ParentQueueBlock(ViewContext ctx, FSQInfo info) {
+      super(ctx);
+      qinfo = (FairSchedulerQueueInfo)info.qinfo;
+    }
+
+    @Override
+    protected void render(Block html) {
+      ResponseInfo ri = info("\'" + qinfo.getQueueName() + "\' Queue Status").
+          _("Used Resources:", qinfo.getUsedResources().toString()).
+          _("Min Resources:", qinfo.getMinResources().toString()).
+          _("Max Resources:", qinfo.getMaxResources().toString()).
+          _("Reserved Resources:", qinfo.getReservedResources().toString());
+      int maxApps = qinfo.getMaxApplications();
+      if (maxApps < Integer.MAX_VALUE) {
+          ri._("Max Running Applications:", qinfo.getMaxApplications());
+      }
+      ri._(STEADY_FAIR_SHARE + ":", qinfo.getSteadyFairShare().toString());
+      ri._(INSTANTANEOUS_FAIR_SHARE + ":", qinfo.getFairShare().toString());
+      html._(InfoBlock.class);
+
+      // clear the info contents so this queue's info doesn't accumulate into another queue's info
+      ri.clear();
+    }
+  }
+
   static class QueueBlock extends HtmlBlock {
     final FSQInfo fsqinfo;
 
@@ -95,16 +134,21 @@ public class FairSchedulerPage extends RmView {
       UL<Hamlet> ul = html.ul("#pq");
       for (FairSchedulerQueueInfo info : subQueues) {
         float capacity = info.getMaxResourcesFraction();
-        float fairShare = info.getFairShareMemoryFraction();
+        float steadyFairShare = info.getSteadyFairShareMemoryFraction();
+        float instantaneousFairShare = info.getFairShareMemoryFraction();
         float used = info.getUsedMemoryFraction();
         LI<UL<Hamlet>> li = ul.
           li().
             a(_Q).$style(width(capacity * Q_MAX_WIDTH)).
-              $title(join("Fair Share:", percent(fairShare))).
-              span().$style(join(Q_GIVEN, ";font-size:1px;", width(fairShare/capacity))).
+              $title(join(join(STEADY_FAIR_SHARE + ":", percent(steadyFairShare)),
+                  join(" " + INSTANTANEOUS_FAIR_SHARE + ":", percent(instantaneousFairShare)))).
+              span().$style(join(Q_GIVEN, ";font-size:1px;", width(steadyFairShare / capacity))).
+                _('.')._().
+              span().$style(join(Q_INSTANTANEOUS_FS, ";font-size:1px;",
+                  width(instantaneousFairShare/capacity))).
                 _('.')._().
               span().$style(join(width(used/capacity),
-                ";font-size:1px;left:0%;", used > fairShare ? Q_OVER : Q_UNDER)).
+                ";font-size:1px;left:0%;", used > instantaneousFairShare ? Q_OVER : Q_UNDER)).
                 _('.')._().
               span(".q", info.getQueueName())._().
             span().$class("qstats").$style(left(Q_STATS_POS)).
@@ -114,6 +158,7 @@ public class FairSchedulerPage extends RmView {
         if (info instanceof FairSchedulerLeafQueueInfo) {
           li.ul("#lq").li()._(LeafQueueBlock.class)._()._();
         } else {
+          li.ul("#lq").li()._(ParentQueueBlock.class)._()._();
           li._(QueueBlock.class);
         }
         li._();
@@ -156,7 +201,13 @@ public class FairSchedulerPage extends RmView {
           li().$style("margin-bottom: 1em").
             span().$style("font-weight: bold")._("Legend:")._().
             span().$class("qlegend ui-corner-all").$style(Q_GIVEN).
-              _("Fair Share")._().
+              $title("The steady fair shares consider all queues, " +
+                  "both active (with running applications) and inactive.").
+              _(STEADY_FAIR_SHARE)._().
+            span().$class("qlegend ui-corner-all").$style(Q_INSTANTANEOUS_FS).
+              $title("The instantaneous fair shares consider only active " +
+                  "queues (with running applications).").
+              _(INSTANTANEOUS_FAIR_SHARE)._().
             span().$class("qlegend ui-corner-all").$style(Q_UNDER).
               _("Used")._().
             span().$class("qlegend ui-corner-all").$style(Q_OVER).
@@ -221,30 +272,20 @@ public class FairSchedulerPage extends RmView {
     return QueuesBlock.class;
   }
 
+  @Override
+  protected String initAppsTable() {
+    return WebPageUtils.appsTableInit(true, false);
+  }
+
   static String percent(float f) {
-    return String.format("%.1f%%", f * 100);
+    return StringUtils.formatPercent(f, 1);
   }
 
   static String width(float f) {
-    return String.format("width:%.1f%%", f * 100);
+    return StringUtils.format("width:%.1f%%", f * 100);
   }
 
   static String left(float f) {
-    return String.format("left:%.1f%%", f * 100);
-  }
-  
-  @Override
-  protected String getAppsTableColumnDefs() {
-    StringBuilder sb = new StringBuilder();
-    return sb
-      .append("[\n")
-      .append("{'sType':'numeric', 'aTargets': [0]")
-      .append(", 'mRender': parseHadoopID }")
-
-      .append("\n, {'sType':'numeric', 'aTargets': [6, 7]")
-      .append(", 'mRender': renderHadoopDate }")
-
-      .append("\n, {'sType':'numeric', bSearchable:false, 'aTargets': [9]")
-      .append(", 'mRender': parseHadoopProgress }]").toString();
+    return StringUtils.format("left:%.1f%%", f * 100);
   }
 }

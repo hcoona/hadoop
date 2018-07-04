@@ -20,13 +20,14 @@ package org.apache.hadoop.yarn.server.resourcemanager.resource;
 
 import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Evolving;
+import org.apache.hadoop.util.StringUtils;
 
 @Private
 @Evolving
 public class ResourceWeights {
   public static final ResourceWeights NEUTRAL = new ResourceWeights(1.0f);
 
-  private float[] weights = new float[ResourceType.values().length];
+  private final float[] weights = new float[ResourceType.values().length];
 
   public ResourceWeights(float memoryWeight, float cpuWeight) {
     weights[ResourceType.MEMORY.ordinal()] = memoryWeight;
@@ -39,7 +40,7 @@ public class ResourceWeights {
 
   public ResourceWeights() { }
 
-  public void setWeight(float weight) {
+  public final void setWeight(float weight) {
     for (int i = 0; i < weights.length; i++) {
       weights[i] = weight;
     }
@@ -53,16 +54,17 @@ public class ResourceWeights {
     return weights[resourceType.ordinal()];
   }
   
+  @Override
   public String toString() {
-    StringBuffer sb = new StringBuffer();
+    StringBuilder sb = new StringBuilder();
     sb.append("<");
     for (int i = 0; i < ResourceType.values().length; i++) {
       if (i != 0) {
         sb.append(", ");
       }
       ResourceType resourceType = ResourceType.values()[i];
-      sb.append(resourceType.name().toLowerCase());
-      sb.append(String.format(" weight=%.1f", getWeight(resourceType)));
+      sb.append(StringUtils.toLowerCase(resourceType.name()));
+      sb.append(StringUtils.format(" weight=%.1f", getWeight(resourceType)));
     }
     sb.append(">");
     return sb.toString();

@@ -49,14 +49,16 @@ public class VisualizeStateMachine {
       if (gname.endsWith("Impl")) {
         gname = gname.substring(0, gname.length()-4);
       }
-      ret.addSubGraph(factory.generateStateGraph(gname));
+      if (ret != null) {
+        ret.addSubGraph(factory.generateStateGraph(gname));
+      }
     }
     return ret;
   }
 
   public static void main(String [] args) throws Exception {
     if (args.length < 3) {
-      System.err.printf("Usage: %s <GraphName> <class[,class[,...]]> <OutputFile>\n",
+      System.err.printf("Usage: %s <GraphName> <class[,class[,...]]> <OutputFile>%n",
           VisualizeStateMachine.class.getName());
       System.exit(1);
     }

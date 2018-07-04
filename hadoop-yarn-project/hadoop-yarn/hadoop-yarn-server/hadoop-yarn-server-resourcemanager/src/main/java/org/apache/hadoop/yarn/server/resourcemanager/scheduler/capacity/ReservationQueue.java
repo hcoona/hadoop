@@ -39,12 +39,9 @@ public class ReservationQueue extends LeafQueue {
 
   private PlanQueue parent;
 
-  private int maxSystemApps;
-
   public ReservationQueue(CapacitySchedulerContext cs, String queueName,
       PlanQueue parent) throws IOException {
     super(cs, queueName, parent, null);
-    maxSystemApps = cs.getConfiguration().getMaximumSystemApplications();
     // the following parameters are common to all reservation in the plan
     updateQuotas(parent.getUserLimitForReservation(),
         parent.getUserLimitFactor(),
@@ -54,23 +51,28 @@ public class ReservationQueue extends LeafQueue {
   }
 
   @Override
-  public synchronized void reinitialize(CSQueue newlyParsedQueue,
+  public void reinitialize(CSQueue newlyParsedQueue,
       Resource clusterResource) throws IOException {
-    // Sanity check
-    if (!(newlyParsedQueue instanceof ReservationQueue)
-        || !newlyParsedQueue.getQueuePath().equals(getQueuePath())) {
-      throw new IOException("Trying to reinitialize " + getQueuePath()
-          + " from " + newlyParsedQueue.getQueuePath());
+    try {
+      writeLock.lock();
+      // Sanity check
+      if (!(newlyParsedQueue instanceof ReservationQueue) || !newlyParsedQueue
+          .getQueuePath().equals(getQueuePath())) {
+        throw new IOException(
+            "Trying to reinitialize " + getQueuePath() + " from "
+                + newlyParsedQueue.getQueuePath());
+      }
+      super.reinitialize(newlyParsedQueue, clusterResource);
+      CSQueueUtils.updateQueueStatistics(resourceCalculator, clusterResource,
+          this, labelManager, null);
+
+      updateQuotas(parent.getUserLimitForReservation(),
+          parent.getUserLimitFactor(),
+          parent.getMaxApplicationsForReservations(),
+          parent.getMaxApplicationsPerUserForReservation());
+    } finally {
+      writeLock.unlock();
     }
-    CSQueueUtils.updateQueueStatistics(
-        parent.schedulerContext.getResourceCalculator(), newlyParsedQueue,
-        parent, parent.schedulerContext.getClusterResource(),
-        parent.schedulerContext.getMinimumResourceCapability());
-    super.reinitialize(newlyParsedQueue, clusterResource);
-    updateQuotas(parent.getUserLimitForReservation(),
-        parent.getUserLimitFactor(),
-        parent.getMaxApplicationsForReservations(),
-        parent.getMaxApplicationsPerUserForReservation());
   }
 
   /**
@@ -81,22 +83,26 @@ public class ReservationQueue extends LeafQueue {
    *          maxCapacity, etc..)
    * @throws SchedulerDynamicEditException
    */
-  public synchronized void setEntitlement(QueueEntitlement entitlement)
+  public void setEntitlement(QueueEntitlement entitlement)
       throws SchedulerDynamicEditException {
-    float capacity = entitlement.getCapacity();
-    if (capacity < 0 || capacity > 1.0f) {
-      throw new SchedulerDynamicEditException(
-          "Capacity demand is not in the [0,1] range: " + capacity);
-    }
-    setCapacity(capacity);
-    setAbsoluteCapacity(getParent().getAbsoluteCapacity() * getCapacity());
-    setMaxApplications((int) (maxSystemApps * getAbsoluteCapacity()));
-    // note: we currently set maxCapacity to capacity
-    // this might be revised later
-    setMaxCapacity(entitlement.getMaxCapacity());
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("successfully changed to " + capacity + " for queue "
-          + this.getQueueName());
+    try {
+      writeLock.lock();
+      float capacity = entitlement.getCapacity();
+      if (capacity < 0 || capacity > 1.0f) {
+        throw new SchedulerDynamicEditException(
+            "Capacity demand is not in the [0,1] range: " + capacity);
+      }
+      setCapacity(capacity);
+      setAbsoluteCapacity(getParent().getAbsoluteCapacity() * getCapacity());
+      // note: we currently set maxCapacity to capacity
+      // this might be revised later
+      setMaxCapacity(entitlement.getMaxCapacity());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("successfully changed to " + capacity + " for queue " + this
+            .getQueueName());
+      }
+    } finally {
+      writeLock.unlock();
     }
   }
 
@@ -108,9 +114,9 @@ public class ReservationQueue extends LeafQueue {
     maxApplicationsPerUser = maxAppsPerUserForReservation;
   }
 
-  // used by the super constructor, we initialize to zero
-  protected float getCapacityFromConf() {
-    return 0f;
+  @Override
+  protected void setupConfigurableCapacities() {
+    CSQueueUtils.updateAndCheckCapacitiesByLabel(getQueuePath(),
+        queueCapacities, parent == null ? null : parent.getQueueCapacities());
   }
-
 }

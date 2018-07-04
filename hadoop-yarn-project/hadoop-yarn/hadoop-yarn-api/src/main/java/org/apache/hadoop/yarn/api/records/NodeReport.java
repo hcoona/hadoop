@@ -28,19 +28,18 @@ import org.apache.hadoop.yarn.api.ApplicationClientProtocol;
 import org.apache.hadoop.yarn.util.Records;
 
 /**
- * <p><code>NodeReport</code> is a summary of runtime information of a 
- * node in the cluster.</p>
- * 
- * <p>It includes details such as:
- *   <ul>
- *     <li>{@link NodeId} of the node.</li>
- *     <li>HTTP Tracking URL of the node.</li>
- *     <li>Rack name for the node.</li>
- *     <li>Used {@link Resource} on the node.</li>
- *     <li>Total available {@link Resource} of the node.</li>
- *     <li>Number of running containers on the node.</li>
- *   </ul>
- * </p>
+ * {@code NodeReport} is a summary of runtime information of a node
+ * in the cluster.
+ * <p>
+ * It includes details such as:
+ * <ul>
+ *   <li>{@link NodeId} of the node.</li>
+ *   <li>HTTP Tracking URL of the node.</li>
+ *   <li>Rack name for the node.</li>
+ *   <li>Used {@link Resource} on the node.</li>
+ *   <li>Total available {@link Resource} of the node.</li>
+ *   <li>Number of running containers on the node.</li>
+ * </ul>
  *
  * @see ApplicationClientProtocol#getClusterNodes(org.apache.hadoop.yarn.api.protocolrecords.GetClusterNodesRequest)
  */
@@ -197,4 +196,35 @@ public abstract class NodeReport {
   @Private
   @Unstable
   public abstract void setNodeLabels(Set<String> nodeLabels);
+
+  /**
+   * Get containers aggregated resource utilization in a node
+   * @return containers resource utilization
+   */
+  @Public
+  @Stable
+  public ResourceUtilization getAggregatedContainersUtilization() {
+    throw new UnsupportedOperationException(
+        "subclass must implement this method");
+  }
+
+  @Private
+  @Unstable
+  public void setAggregatedContainersUtilization(ResourceUtilization
+      containersUtilization) {
+    throw new UnsupportedOperationException(
+        "subclass must implement this method");
+  }
+
+  /**
+   * Get node resource utilization
+   * @return node resource utilization
+   */
+  @Public
+  @Stable
+  public abstract ResourceUtilization getNodeUtilization();
+
+  @Private
+  @Unstable
+  public abstract void setNodeUtilization(ResourceUtilization nodeUtilization);
 }

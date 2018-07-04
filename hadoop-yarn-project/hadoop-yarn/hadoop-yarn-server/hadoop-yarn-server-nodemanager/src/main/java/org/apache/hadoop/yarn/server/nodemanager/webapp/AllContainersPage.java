@@ -51,10 +51,16 @@ public class AllContainersPage extends NMView {
 
   private String containersTableInit() {
     return tableInit().
-        // containerid, containerid, log-url
-        append(", aoColumns:[null, null, {bSearchable:false}]} ").toString();
+        // containerid, executiontype, containerid, log-url
+        append(", aoColumns:[").append(getContainersIdColumnDefs())
+        .append(", null, null, {bSearchable:false}]} ").toString();
   }
 
+  private String getContainersIdColumnDefs() {
+    StringBuilder sb = new StringBuilder();
+    return sb.append("{'sType':'natural', 'aTargets': [0]")
+        .append(", 'mRender': parseHadoopID }").toString();
+  }
   @Override
   protected Class<? extends SubView> content() {
     return AllContainersBlock.class;
@@ -77,6 +83,7 @@ public class AllContainersPage extends NMView {
           .thead()
             .tr()
               .td()._("ContainerId")._()
+              .td()._("ExecutionType")._()
               .td()._("ContainerState")._()
               .td()._("logs")._()
             ._()
@@ -88,6 +95,7 @@ public class AllContainersPage extends NMView {
           .tr()
             .td().a(url("container", info.getId()), info.getId())
             ._()
+            .td()._(info.getExecutionType())._()
             .td()._(info.getState())._()
             .td()
                 .a(url(info.getShortLogLink()), "logs")._()

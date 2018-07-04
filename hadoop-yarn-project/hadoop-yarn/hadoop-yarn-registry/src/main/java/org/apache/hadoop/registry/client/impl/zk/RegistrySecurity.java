@@ -152,6 +152,8 @@ public class RegistrySecurity extends AbstractService {
    */
   private final List<ACL> systemACLs = new ArrayList<ACL>();
 
+  private boolean usesRealm = true;
+
   /**
    * A list of digest ACLs which can be added to permissions
    * —and cleared later.
@@ -192,14 +194,17 @@ public class RegistrySecurity extends AbstractService {
     String auth = conf.getTrimmed(KEY_REGISTRY_CLIENT_AUTH,
         REGISTRY_CLIENT_AUTH_ANONYMOUS);
 
-    // TODO JDK7 SWITCH
-    if (REGISTRY_CLIENT_AUTH_KERBEROS.equals(auth)) {
+    switch (auth) {
+    case REGISTRY_CLIENT_AUTH_KERBEROS:
       access = AccessPolicy.sasl;
-    } else if (REGISTRY_CLIENT_AUTH_DIGEST.equals(auth)) {
+      break;
+    case REGISTRY_CLIENT_AUTH_DIGEST:
       access = AccessPolicy.digest;
-    } else if (REGISTRY_CLIENT_AUTH_ANONYMOUS.equals(auth)) {
+      break;
+    case REGISTRY_CLIENT_AUTH_ANONYMOUS:
       access = AccessPolicy.anon;
-    } else {
+      break;
+    default:
       throw new ServiceStateException(E_UNKNOWN_AUTHENTICATION_MECHANISM
                                       + "\"" + auth + "\"");
     }
@@ -227,6 +232,7 @@ public class RegistrySecurity extends AbstractService {
       // System Accounts
       String system = getOrFail(KEY_REGISTRY_SYSTEM_ACCOUNTS,
                                 DEFAULT_REGISTRY_SYSTEM_ACCOUNTS);
+      usesRealm = system.contains("@");
 
       systemACLs.addAll(buildACLs(system, kerberosRealm, ZooDefs.Perms.ALL));
 
@@ -353,7 +359,7 @@ public class RegistrySecurity extends AbstractService {
    * @return the system principals
    */
   public List<ACL> getSystemACLs() {
-    Preconditions.checkNotNull(systemACLs, "registry security is unitialized");
+    Preconditions.checkNotNull(systemACLs, "registry security is uninitialized");
     return Collections.unmodifiableList(systemACLs);
   }
 
@@ -390,7 +396,12 @@ public class RegistrySecurity extends AbstractService {
    * @return a new ACL
    */
   public ACL createSaslACL(UserGroupInformation ugi, int perms) {
-    String userName = ugi.getUserName();
+    String userName = null;
+    if (usesRealm) {
+      userName = ugi.getUserName();
+    } else {
+      userName = ugi.getShortUserName();
+    }
     return new ACL(perms, new Id(SCHEME_SASL, userName));
   }
 
@@ -440,7 +451,7 @@ public class RegistrySecurity extends AbstractService {
    */
   public String digest(String idPasswordPair) throws IOException {
     if (StringUtils.isEmpty(idPasswordPair) || !isValid(idPasswordPair)) {
-      throw new IOException("Invalid id:password: " + idPasswordPair);
+      throw new IOException("Invalid id:password");
     }
     try {
       return DigestAuthenticationProvider.generateDigest(idPasswordPair);
@@ -592,17 +603,17 @@ public class RegistrySecurity extends AbstractService {
    * Note the semicolon on the last entry
    */
   private static final String JAAS_ENTRY =
-      "%s { \n"
-      + " %s required\n"
+      "%s { %n"
+      + " %s required%n"
       // kerberos module
-      + " keyTab=\"%s\"\n"
-      + " debug=true\n"
-      + " principal=\"%s\"\n"
-      + " useKeyTab=true\n"
-      + " useTicketCache=false\n"
-      + " doNotPrompt=true\n"
-      + " storeKey=true;\n"
-      + "}; \n"
+      + " keyTab=\"%s\"%n"
+      + " debug=true%n"
+      + " principal=\"%s\"%n"
+      + " useKeyTab=true%n"
+      + " useTicketCache=false%n"
+      + " doNotPrompt=true%n"
+      + " storeKey=true;%n"
+      + "}; %n"
       ;
 
   /**
@@ -734,8 +745,15 @@ public class RegistrySecurity extends AbstractService {
       String context)  {
     RegistrySecurity.validateContext(context);
     enableZookeeperClientSASL();
-    System.setProperty(PROP_ZK_SASL_CLIENT_USERNAME, username);
-    System.setProperty(PROP_ZK_SASL_CLIENT_CONTEXT, context);
+    setSystemPropertyIfUnset(PROP_ZK_SASL_CLIENT_USERNAME, username);
+    setSystemPropertyIfUnset(PROP_ZK_SASL_CLIENT_CONTEXT, context);
+  }
+
+  private static void setSystemPropertyIfUnset(String name, String value) {
+    String existingValue = System.getProperty(name);
+    if (existingValue == null || existingValue.isEmpty()) {
+      System.setProperty(name, value);
+    }
   }
 
   /**
@@ -769,7 +787,7 @@ public class RegistrySecurity extends AbstractService {
    * @return true if the SASL client system property is set.
    */
   public static boolean isClientSASLEnabled() {
-    return Boolean.valueOf(System.getProperty(
+    return Boolean.parseBoolean(System.getProperty(
         ZookeeperConfigOptions.PROP_ZK_ENABLE_SASL_CLIENT, "true"));
   }
 
@@ -859,7 +877,7 @@ public class RegistrySecurity extends AbstractService {
     String sasl =
         System.getProperty(PROP_ZK_ENABLE_SASL_CLIENT,
             DEFAULT_ZK_ENABLE_SASL_CLIENT);
-    boolean saslEnabled = Boolean.valueOf(sasl);
+    boolean saslEnabled = Boolean.parseBoolean(sasl);
     builder.append(describeProperty(PROP_ZK_ENABLE_SASL_CLIENT,
         DEFAULT_ZK_ENABLE_SASL_CLIENT));
     if (saslEnabled) {
@@ -936,7 +954,7 @@ public class RegistrySecurity extends AbstractService {
    * @return an ACL for the user
    */
   public ACL createACLfromUsername(String username, int perms) {
-    if (!username.contains("@")) {
+    if (usesRealm && !username.contains("@")) {
       username = username + "@" + kerberosRealm;
       if (LOG.isDebugEnabled()) {
         LOG.debug("Appending kerberos realm to make {}", username);

@@ -21,6 +21,7 @@ package org.apache.hadoop.yarn.api.records.impl.pb;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerReport;
 import org.apache.hadoop.yarn.api.records.ContainerState;
+import org.apache.hadoop.yarn.api.records.ExecutionType;
 import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
@@ -270,9 +271,7 @@ public class ContainerReportPBImpl extends ContainerReport {
         && !((NodeIdPBImpl) nodeId).getProto().equals(builder.getNodeId())) {
       builder.setNodeId(convertToProtoFormat(this.nodeId));
     }
-    if (this.resource != null
-        && !((ResourcePBImpl) this.resource).getProto().equals(
-          builder.getResource())) {
+    if (this.resource != null) {
       builder.setResource(convertToProtoFormat(this.resource));
     }
     if (this.priority != null
@@ -318,7 +317,7 @@ public class ContainerReportPBImpl extends ContainerReport {
   }
 
   private ResourceProto convertToProtoFormat(Resource t) {
-    return ((ResourcePBImpl) t).getProto();
+    return ProtoUtils.convertToProtoFormat(t);
   }
 
   private PriorityPBImpl convertFromProtoFormat(PriorityProto p) {
@@ -337,5 +336,43 @@ public class ContainerReportPBImpl extends ContainerReport {
   private ContainerState convertFromProtoFormat(
       ContainerStateProto containerState) {
     return ProtoUtils.convertFromProtoFormat(containerState);
+  }
+
+  @Override
+  public String getNodeHttpAddress() {
+    ContainerReportProtoOrBuilder p = viaProto ? proto : builder;
+    if (!p.hasNodeHttpAddress()) {
+      return null;
+    }
+    return (p.getNodeHttpAddress());
+  }
+
+  @Override
+  public void setNodeHttpAddress(String nodeHttpAddress) {
+    maybeInitBuilder();
+    if (nodeHttpAddress == null) {
+      builder.clearNodeHttpAddress();
+      return;
+    }
+    builder.setNodeHttpAddress(nodeHttpAddress);
+  }
+
+  @Override
+  public ExecutionType getExecutionType() {
+    ContainerReportProtoOrBuilder p = viaProto ? proto : builder;
+    if (!p.hasExecutionType()) {
+      return ExecutionType.GUARANTEED;  // default value
+    }
+    return ProtoUtils.convertFromProtoFormat(p.getExecutionType());
+  }
+
+  @Override
+  public void setExecutionType(ExecutionType executionType) {
+    maybeInitBuilder();
+    if (executionType == null) {
+      builder.clearExecutionType();
+      return;
+    }
+    builder.setExecutionType(ProtoUtils.convertToProtoFormat(executionType));
   }
 }

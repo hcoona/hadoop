@@ -22,7 +22,18 @@ package org.apache.hadoop.yarn.server.resourcemanager.scheduler;
  * Resource classification.
  */
 public enum NodeType {
-  NODE_LOCAL,
-  RACK_LOCAL,
-  OFF_SWITCH
+  NODE_LOCAL(0), RACK_LOCAL(1), OFF_SWITCH(2);
+
+  private final int index;
+
+  NodeType(int index) {
+    this.index = index;
+  }
+
+  /**
+   * @return the index of the node type
+   */
+  public int getIndex() {
+    return index;
+  }
 }

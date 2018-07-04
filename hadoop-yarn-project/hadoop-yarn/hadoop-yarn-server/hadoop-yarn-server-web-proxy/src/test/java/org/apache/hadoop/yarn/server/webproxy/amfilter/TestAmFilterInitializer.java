@@ -57,6 +57,7 @@ public class TestAmFilterInitializer extends TestCase {
     assertEquals("host1", con.givenParameters.get(AmIpFilter.PROXY_HOSTS));
     assertEquals("http://host1:1000/foo",
         con.givenParameters.get(AmIpFilter.PROXY_URI_BASES));
+    assertEquals(null, con.givenParameters.get(AmFilterInitializer.RM_HA_URLS));
 
     // Check a single RM_WEBAPP_ADDRESS
     con = new MockFilterContainer();
@@ -69,6 +70,7 @@ public class TestAmFilterInitializer extends TestCase {
     assertEquals("host2", con.givenParameters.get(AmIpFilter.PROXY_HOSTS));
     assertEquals("http://host2:2000/foo",
         con.givenParameters.get(AmIpFilter.PROXY_URI_BASES));
+    assertEquals(null, con.givenParameters.get(AmFilterInitializer.RM_HA_URLS));
 
     // Check multiple RM_WEBAPP_ADDRESSes (RM HA)
     con = new MockFilterContainer();
@@ -81,7 +83,7 @@ public class TestAmFilterInitializer extends TestCase {
     afi = new MockAmFilterInitializer();
     assertNull(con.givenParameters);
     afi.initFilter(con, conf);
-    assertEquals(2, con.givenParameters.size());
+    assertEquals(3, con.givenParameters.size());
     String[] proxyHosts = con.givenParameters.get(AmIpFilter.PROXY_HOSTS)
         .split(AmIpFilter.PROXY_HOSTS_DELIMITER);
     assertEquals(3, proxyHosts.length);
@@ -96,6 +98,8 @@ public class TestAmFilterInitializer extends TestCase {
     assertEquals("http://host2:2000/foo", proxyBases[0]);
     assertEquals("http://host3:3000/foo", proxyBases[1]);
     assertEquals("http://host4:4000/foo", proxyBases[2]);
+    assertEquals("host2:2000,host3:3000,host4:4000",
+        con.givenParameters.get(AmFilterInitializer.RM_HA_URLS));
 
     // Check multiple RM_WEBAPP_ADDRESSes (RM HA) with HTTPS
     con = new MockFilterContainer();
@@ -109,7 +113,7 @@ public class TestAmFilterInitializer extends TestCase {
     afi = new MockAmFilterInitializer();
     assertNull(con.givenParameters);
     afi.initFilter(con, conf);
-    assertEquals(2, con.givenParameters.size());
+    assertEquals(3, con.givenParameters.size());
     proxyHosts = con.givenParameters.get(AmIpFilter.PROXY_HOSTS)
         .split(AmIpFilter.PROXY_HOSTS_DELIMITER);
     assertEquals(2, proxyHosts.length);
@@ -122,6 +126,8 @@ public class TestAmFilterInitializer extends TestCase {
     Arrays.sort(proxyBases);
     assertEquals("https://host5:5000/foo", proxyBases[0]);
     assertEquals("https://host6:6000/foo", proxyBases[1]);
+    assertEquals("host5:5000,host6:6000",
+        con.givenParameters.get(AmFilterInitializer.RM_HA_URLS));
   }
 
   @Test
@@ -134,6 +140,15 @@ public class TestAmFilterInitializer extends TestCase {
     assertEquals(1, proxyHosts.size());
     assertEquals(WebAppUtils.getResolvedRMWebAppURLWithoutScheme(conf),
         proxyHosts.get(0));
+
+    // Check conf in which only RM hostname is set
+    conf = new Configuration(false);
+    conf.set(YarnConfiguration.RM_WEBAPP_ADDRESS,
+        "${yarn.resourcemanager.hostname}:8088"); // default in yarn-default.xml
+    conf.set(YarnConfiguration.RM_HOSTNAME, "host1");
+    proxyHosts = WebAppUtils.getProxyHostsAndPortsForAmFilter(conf);
+    assertEquals(1, proxyHosts.size());
+    assertEquals("host1:8088", proxyHosts.get(0));
 
     // Check PROXY_ADDRESS has priority
     conf = new Configuration(false);
@@ -188,6 +203,44 @@ public class TestAmFilterInitializer extends TestCase {
     Collections.sort(proxyHosts);
     assertEquals("host5:5000", proxyHosts.get(0));
     assertEquals("host6:6000", proxyHosts.get(1));
+
+    // Check config without explicit RM_WEBAPP_ADDRESS settings (RM HA)
+    conf = new Configuration(false);
+    conf.setBoolean(YarnConfiguration.RM_HA_ENABLED, true);
+    conf.set(YarnConfiguration.RM_HA_IDS, "rm1,rm2,rm3");
+    conf.set(YarnConfiguration.RM_HOSTNAME + ".rm1", "host2");
+    conf.set(YarnConfiguration.RM_HOSTNAME + ".rm2", "host3");
+    conf.set(YarnConfiguration.RM_HOSTNAME + ".rm3", "host4");
+    conf.set(YarnConfiguration.RM_HOSTNAME + ".rm4", "dummy");
+    proxyHosts = WebAppUtils.getProxyHostsAndPortsForAmFilter(conf);
+    assertEquals(3, proxyHosts.size());
+    Collections.sort(proxyHosts);
+    assertEquals("host2:" + YarnConfiguration.DEFAULT_RM_WEBAPP_PORT,
+        proxyHosts.get(0));
+    assertEquals("host3:" + YarnConfiguration.DEFAULT_RM_WEBAPP_PORT,
+        proxyHosts.get(1));
+    assertEquals("host4:" + YarnConfiguration.DEFAULT_RM_WEBAPP_PORT,
+        proxyHosts.get(2));
+
+    // Check config without explicit RM_WEBAPP_HTTPS_ADDRESS settings (RM HA)
+    conf = new Configuration(false);
+    conf.set(YarnConfiguration.YARN_HTTP_POLICY_KEY,
+        HttpConfig.Policy.HTTPS_ONLY.toString());
+    conf.setBoolean(YarnConfiguration.RM_HA_ENABLED, true);
+    conf.set(YarnConfiguration.RM_HA_IDS, "rm1,rm2,rm3");
+    conf.set(YarnConfiguration.RM_HOSTNAME + ".rm1", "host2");
+    conf.set(YarnConfiguration.RM_HOSTNAME + ".rm2", "host3");
+    conf.set(YarnConfiguration.RM_HOSTNAME + ".rm3", "host4");
+    conf.set(YarnConfiguration.RM_HOSTNAME + ".rm4", "dummy");
+    proxyHosts = WebAppUtils.getProxyHostsAndPortsForAmFilter(conf);
+    assertEquals(3, proxyHosts.size());
+    Collections.sort(proxyHosts);
+    assertEquals("host2:" + YarnConfiguration.DEFAULT_RM_WEBAPP_HTTPS_PORT,
+        proxyHosts.get(0));
+    assertEquals("host3:" + YarnConfiguration.DEFAULT_RM_WEBAPP_HTTPS_PORT,
+        proxyHosts.get(1));
+    assertEquals("host4:" + YarnConfiguration.DEFAULT_RM_WEBAPP_HTTPS_PORT,
+        proxyHosts.get(2));
   }
 
   class MockAmFilterInitializer extends AmFilterInitializer {

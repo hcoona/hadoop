@@ -19,8 +19,9 @@ package org.apache.hadoop.yarn.server.nodemanager.containermanager.localizer.eve
 
 public enum LocalizationEventType {
   INIT_APPLICATION_RESOURCES,
-  INIT_CONTAINER_RESOURCES,
+  LOCALIZE_CONTAINER_RESOURCES,
   CACHE_CLEANUP,
   CLEANUP_CONTAINER_RESOURCES,
   DESTROY_APPLICATION_RESOURCES,
+  CONTAINER_RESOURCES_LOCALIZED,
 }

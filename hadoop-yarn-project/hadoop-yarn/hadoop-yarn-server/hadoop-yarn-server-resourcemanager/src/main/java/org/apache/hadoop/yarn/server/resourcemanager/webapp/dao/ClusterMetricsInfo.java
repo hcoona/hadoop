@@ -22,48 +22,53 @@ import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlRootElement;
 
 import org.apache.hadoop.yarn.server.resourcemanager.ClusterMetrics;
-import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 
 @XmlRootElement(name = "clusterMetrics")
 @XmlAccessorType(XmlAccessType.FIELD)
 public class ClusterMetricsInfo {
 
-  protected int appsSubmitted;
-  protected int appsCompleted;
-  protected int appsPending;
-  protected int appsRunning;
-  protected int appsFailed;
-  protected int appsKilled;
+  private int appsSubmitted;
+  private int appsCompleted;
+  private int appsPending;
+  private int appsRunning;
+  private int appsFailed;
+  private int appsKilled;
 
-  protected long reservedMB;
-  protected long availableMB;
-  protected long allocatedMB;
+  private long reservedMB;
+  private long availableMB;
+  private long allocatedMB;
 
-  protected long reservedVirtualCores;
-  protected long availableVirtualCores;
-  protected long allocatedVirtualCores;
+  private long reservedVirtualCores;
+  private long availableVirtualCores;
+  private long allocatedVirtualCores;
 
-  protected int containersAllocated;
-  protected int containersReserved;
-  protected int containersPending;
+  private int containersAllocated;
+  private int containersReserved;
+  private int containersPending;
 
-  protected long totalMB;
-  protected long totalVirtualCores;
-  protected int totalNodes;
-  protected int lostNodes;
-  protected int unhealthyNodes;
-  protected int decommissionedNodes;
-  protected int rebootedNodes;
-  protected int activeNodes;
+  private long totalMB;
+  private long totalVirtualCores;
+  private int totalNodes;
+  private int lostNodes;
+  private int unhealthyNodes;
+  private int decommissioningNodes;
+  private int decommissionedNodes;
+  private int rebootedNodes;
+  private int activeNodes;
+  private int shutdownNodes;
 
   public ClusterMetricsInfo() {
   } // JAXB needs this
 
-  public ClusterMetricsInfo(final ResourceManager rm, final RMContext rmContext) {
-    ResourceScheduler rs = rm.getResourceScheduler();
+  public ClusterMetricsInfo(final ResourceManager rm) {
+    this(rm.getResourceScheduler());
+  }
+
+  public ClusterMetricsInfo(final ResourceScheduler rs) {
     QueueMetrics metrics = rs.getRootQueueMetrics();
     ClusterMetrics clusterMetrics = ClusterMetrics.getMetrics();
 
@@ -86,15 +91,23 @@ public class ClusterMetricsInfo {
     this.containersPending = metrics.getPendingContainers();
     this.containersReserved = metrics.getReservedContainers();
 
-    this.totalMB = availableMB + allocatedMB;
-    this.totalVirtualCores = availableVirtualCores + allocatedVirtualCores;
+    if (rs instanceof CapacityScheduler) {
+      this.totalMB = availableMB + allocatedMB + reservedMB;
+      this.totalVirtualCores =
+          availableVirtualCores + allocatedVirtualCores + containersReserved;
+    } else {
+      this.totalMB = availableMB + allocatedMB;
+      this.totalVirtualCores = availableVirtualCores + allocatedVirtualCores;
+    }
     this.activeNodes = clusterMetrics.getNumActiveNMs();
     this.lostNodes = clusterMetrics.getNumLostNMs();
     this.unhealthyNodes = clusterMetrics.getUnhealthyNMs();
+    this.decommissioningNodes = clusterMetrics.getNumDecommissioningNMs();
     this.decommissionedNodes = clusterMetrics.getNumDecommisionedNMs();
     this.rebootedNodes = clusterMetrics.getNumRebootedNMs();
+    this.shutdownNodes = clusterMetrics.getNumShutdownNMs();
     this.totalNodes = activeNodes + lostNodes + decommissionedNodes
-        + rebootedNodes + unhealthyNodes;
+        + rebootedNodes + unhealthyNodes + decommissioningNodes + shutdownNodes;
   }
 
   public int getAppsSubmitted() {
@@ -185,8 +198,116 @@ public class ClusterMetricsInfo {
     return this.unhealthyNodes;
   }
 
+  public int getDecommissioningNodes() {
+    return this.decommissioningNodes;
+  }
+
   public int getDecommissionedNodes() {
     return this.decommissionedNodes;
+  }
+
+  public int getShutdownNodes() {
+    return this.shutdownNodes;
+  }
+
+  public void setContainersReserved(int containersReserved) {
+    this.containersReserved = containersReserved;
+  }
+
+  public void setContainersPending(int containersPending) {
+    this.containersPending = containersPending;
+  }
+
+  public void setAppsSubmitted(int appsSubmitted) {
+    this.appsSubmitted = appsSubmitted;
+  }
+
+  public void setAppsCompleted(int appsCompleted) {
+    this.appsCompleted = appsCompleted;
+  }
+
+  public void setAppsPending(int appsPending) {
+    this.appsPending = appsPending;
+  }
+
+  public void setAppsRunning(int appsRunning) {
+    this.appsRunning = appsRunning;
+  }
+
+  public void setAppsFailed(int appsFailed) {
+    this.appsFailed = appsFailed;
+  }
+
+  public void setAppsKilled(int appsKilled) {
+    this.appsKilled = appsKilled;
+  }
+
+  public void setReservedMB(long reservedMB) {
+    this.reservedMB = reservedMB;
+  }
+
+  public void setAvailableMB(long availableMB) {
+    this.availableMB = availableMB;
+  }
+
+  public void setAllocatedMB(long allocatedMB) {
+    this.allocatedMB = allocatedMB;
+  }
+
+  public void setReservedVirtualCores(long reservedVirtualCores) {
+    this.reservedVirtualCores = reservedVirtualCores;
+  }
+
+  public void setAvailableVirtualCores(long availableVirtualCores) {
+    this.availableVirtualCores = availableVirtualCores;
+  }
+
+  public void setAllocatedVirtualCores(long allocatedVirtualCores) {
+    this.allocatedVirtualCores = allocatedVirtualCores;
+  }
+
+  public void setContainersAllocated(int containersAllocated) {
+    this.containersAllocated = containersAllocated;
+  }
+
+  public void setTotalMB(long totalMB) {
+    this.totalMB = totalMB;
+  }
+
+  public void setTotalVirtualCores(long totalVirtualCores) {
+    this.totalVirtualCores = totalVirtualCores;
+  }
+
+  public void setTotalNodes(int totalNodes) {
+    this.totalNodes = totalNodes;
+  }
+
+  public void setLostNodes(int lostNodes) {
+    this.lostNodes = lostNodes;
+  }
+
+  public void setUnhealthyNodes(int unhealthyNodes) {
+    this.unhealthyNodes = unhealthyNodes;
+  }
+
+  public void setDecommissioningNodes(int decommissioningNodes) {
+    this.decommissioningNodes = decommissioningNodes;
+  }
+
+  public void setDecommissionedNodes(int decommissionedNodes) {
+    this.decommissionedNodes = decommissionedNodes;
+  }
+
+  public void setRebootedNodes(int rebootedNodes) {
+    this.rebootedNodes = rebootedNodes;
+  }
+
+  public void setActiveNodes(int activeNodes) {
+    this.activeNodes = activeNodes;
+  }
+
+  public void setShutdownNodes(int shutdownNodes) {
+    this.shutdownNodes = shutdownNodes;
   }
 
 }

@@ -18,21 +18,42 @@
 
 package org.apache.hadoop.yarn.server.webproxy.amfilter;
 
-import java.io.IOException;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import javax.servlet.*;
-import javax.servlet.http.Cookie;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-
-import static org.junit.Assert.*;
-
+import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.server.webproxy.ProxyUtils;
 import org.apache.hadoop.yarn.server.webproxy.WebAppProxyServlet;
 import org.glassfish.grizzly.servlet.HttpServletResponseImpl;
 import org.junit.Test;
 import org.mockito.Mockito;
+
+import javax.servlet.Filter;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletContext;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.net.HttpURLConnection;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Test AmIpFilter. Requests to a no declared hosts should has way through
@@ -117,10 +138,33 @@ public class TestAmFilter {
     filter.destroy();
   }
 
+  @Test
+  public void testFindRedirectUrl() throws Exception {
+    final String rm1 = "rm1";
+    final String rm2 = "rm2";
+
+    final String rm1Url = "host1:8088";
+    final String rm2Url = "host2:8088";
+
+    TestAmIpFilter filter = new TestAmIpFilter();
+    TestAmIpFilter spy = Mockito.spy(filter);
+    // make sure findRedirectUrl() go to HA branch
+    spy.proxyUriBases = new HashMap<>();
+    spy.proxyUriBases.put(rm1, rm1Url);
+    spy.proxyUriBases.put(rm2, rm2Url);
+    spy.rmUrls = new String[] { rm1, rm2 };
+
+    // Stub "isValidUrl" and returns false for rm1, returns true for rm2.
+    Mockito.doReturn(false).when(spy).isValidUrl(Mockito.eq(rm1Url));
+    Mockito.doReturn(true).when(spy).isValidUrl(Mockito.eq(rm2Url));
+
+    assertEquals(spy.findRedirectUrl(), rm2Url);
+  }
+
   /**
    * Test AmIpFilter
    */
-  @Test(timeout = 1000)
+  @Test(timeout = 10000)
   @SuppressWarnings("deprecation")
   public void testFilter() throws Exception {
     Map<String, String> params = new HashMap<String, String>();
@@ -144,32 +188,52 @@ public class TestAmFilter {
     testFilter.init(config);
 
     HttpServletResponseForTest response = new HttpServletResponseForTest();
-    // Test request should implements HttpServletRequest
 
+    // Test request should implements HttpServletRequest
     ServletRequest failRequest = Mockito.mock(ServletRequest.class);
     try {
       testFilter.doFilter(failRequest, response, chain);
       fail();
     } catch (ServletException e) {
-      assertEquals("This filter only works for HTTP/HTTPS", e.getMessage());
+      assertEquals(ProxyUtils.E_HTTP_HTTPS_ONLY, e.getMessage());
     }
 
     // request with HttpServletRequest
     HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
-    Mockito.when(request.getRemoteAddr()).thenReturn("redirect");
-    Mockito.when(request.getRequestURI()).thenReturn("/redirect");
+    Mockito.when(request.getRemoteAddr()).thenReturn("nowhere");
+    Mockito.when(request.getRequestURI()).thenReturn("/app/application_00_0");
+
+    // address "redirect" is not in host list for non-proxy connection
     testFilter.doFilter(request, response, chain);
-    // address "redirect" is not in host list
-    assertEquals("http://bogus/redirect", response.getRedirect());
+    assertEquals(HttpURLConnection.HTTP_MOVED_TEMP, response.status);
+    String redirect = response.getHeader(ProxyUtils.LOCATION);
+    assertEquals("http://bogus/app/application_00_0", redirect);
+
+    // address "redirect" is not in host list for proxy connection
+    Mockito.when(request.getRequestURI()).thenReturn("/proxy/application_00_0");
+    testFilter.doFilter(request, response, chain);
+    assertEquals(HttpURLConnection.HTTP_MOVED_TEMP, response.status);
+    redirect = response.getHeader(ProxyUtils.LOCATION);
+    assertEquals("http://bogus/proxy/redirect/application_00_0", redirect);
+
+    // check for query parameters
+    Mockito.when(request.getRequestURI()).thenReturn("/proxy/application_00_0");
+    Mockito.when(request.getQueryString()).thenReturn("id=0");
+    testFilter.doFilter(request, response, chain);
+    assertEquals(HttpURLConnection.HTTP_MOVED_TEMP, response.status);
+    redirect = response.getHeader(ProxyUtils.LOCATION);
+    assertEquals("http://bogus/proxy/redirect/application_00_0?id=0", redirect);
+
     // "127.0.0.1" contains in host list. Without cookie
     Mockito.when(request.getRemoteAddr()).thenReturn("127.0.0.1");
     testFilter.doFilter(request, response, chain);
-
     assertTrue(doFilterRequest
         .contains("javax.servlet.http.HttpServletRequest"));
+
     // cookie added
-    Cookie[] cookies = new Cookie[1];
-    cookies[0] = new Cookie(WebAppProxyServlet.PROXY_USER_COOKIE_NAME, "user");
+    Cookie[] cookies = new Cookie[] {
+        new Cookie(WebAppProxyServlet.PROXY_USER_COOKIE_NAME, "user")
+    };
 
     Mockito.when(request.getCookies()).thenReturn(cookies);
     testFilter.doFilter(request, response, chain);
@@ -186,6 +250,11 @@ public class TestAmFilter {
 
   private class HttpServletResponseForTest extends HttpServletResponseImpl {
     String redirectLocation = "";
+    int status;
+    private String contentType;
+    private final Map<String, String> headers = new HashMap<>(1);
+    private StringWriter body;
+
 
     public String getRedirect() {
       return redirectLocation;
@@ -201,6 +270,31 @@ public class TestAmFilter {
       return url;
     }
 
+    @Override
+    public void setStatus(int status) {
+      this.status = status;
+    }
+
+    @Override
+    public void setContentType(String type) {
+      this.contentType = type;
+    }
+
+    @Override
+    public void setHeader(String name, String value) {
+      headers.put(name, value);
+    }
+
+    public String getHeader(String name) {
+      return headers.get(name);
+    }
+
+    @Override
+    public PrintWriter getWriter() throws IOException {
+      body = new StringWriter();
+      return new PrintWriter(body);
+    }
   }
 
+  
 }

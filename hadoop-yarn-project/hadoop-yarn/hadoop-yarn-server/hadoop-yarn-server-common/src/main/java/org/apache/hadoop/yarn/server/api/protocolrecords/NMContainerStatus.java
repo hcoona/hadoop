@@ -21,8 +21,10 @@ package org.apache.hadoop.yarn.server.api.protocolrecords;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
+import org.apache.hadoop.yarn.api.records.ExecutionType;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.nodelabels.CommonNodeLabelsManager;
 import org.apache.hadoop.yarn.util.Records;
 
 /**
@@ -31,20 +33,34 @@ import org.apache.hadoop.yarn.util.Records;
  * inside YARN and by end-users.
  */
 public abstract class NMContainerStatus {
-
+  
+  // Used by tests only
   public static NMContainerStatus newInstance(ContainerId containerId,
-      ContainerState containerState, Resource allocatedResource,
+      int version, ContainerState containerState, Resource allocatedResource,
       String diagnostics, int containerExitStatus, Priority priority,
       long creationTime) {
+    return newInstance(containerId, version, containerState, allocatedResource,
+        diagnostics, containerExitStatus, priority, creationTime,
+        CommonNodeLabelsManager.NO_LABEL, ExecutionType.GUARANTEED);
+  }
+
+  public static NMContainerStatus newInstance(ContainerId containerId,
+      int version, ContainerState containerState, Resource allocatedResource,
+      String diagnostics, int containerExitStatus, Priority priority,
+      long creationTime, String nodeLabelExpression,
+      ExecutionType executionType) {
     NMContainerStatus status =
         Records.newRecord(NMContainerStatus.class);
     status.setContainerId(containerId);
+    status.setVersion(version);
     status.setContainerState(containerState);
     status.setAllocatedResource(allocatedResource);
     status.setDiagnostics(diagnostics);
     status.setContainerExitStatus(containerExitStatus);
     status.setPriority(priority);
     status.setCreationTime(creationTime);
+    status.setNodeLabelExpression(nodeLabelExpression);
+    status.setExecutionType(executionType);
     return status;
   }
 
@@ -105,4 +121,30 @@ public abstract class NMContainerStatus {
   public abstract long getCreationTime();
 
   public abstract void setCreationTime(long creationTime);
+  
+  /**
+   * Get the node-label-expression in the original ResourceRequest
+   */
+  public abstract String getNodeLabelExpression();
+
+  public abstract void setNodeLabelExpression(
+      String nodeLabelExpression);
+
+  public int getVersion() {
+    return 0;
+  }
+
+  public void setVersion(int version) {
+
+  }
+
+  /**
+   * Get the <code>ExecutionType</code> of the container.
+   * @return <code>ExecutionType</code> of the container
+   */
+  public ExecutionType getExecutionType() {
+    return ExecutionType.GUARANTEED;
+  }
+
+  public void setExecutionType(ExecutionType executionType) { }
 }

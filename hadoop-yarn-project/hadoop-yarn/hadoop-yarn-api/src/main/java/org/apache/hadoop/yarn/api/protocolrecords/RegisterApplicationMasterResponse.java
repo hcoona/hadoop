@@ -36,16 +36,15 @@ import org.apache.hadoop.yarn.proto.YarnServiceProtos.SchedulerResourceTypes;
 import org.apache.hadoop.yarn.util.Records;
 
 /**
- * <p>The response sent by the <code>ResourceManager</code> to a new 
- * <code>ApplicationMaster</code> on registration.</p>
- * 
- * <p>The response contains critical details such as:
+ * The response sent by the {@code ResourceManager} to a new
+ * {@code ApplicationMaster} on registration.
+ * <p>
+ * The response contains critical details such as:
  * <ul>
  *   <li>Maximum capability for allocated resources in the cluster.</li>
- *   <li><code>ApplicationACL</code>s for the application.</li>
+ *   <li>{@code ApplicationACL}s for the application.</li>
  *   <li>ClientToAMToken master key.</li>
  * </ul>
- * </p>
  * 
  * @see ApplicationMasterProtocol#registerApplicationMaster(RegisterApplicationMasterRequest)
  */
@@ -105,6 +104,7 @@ public abstract class RegisterApplicationMasterResponse {
    * <p>The ClientToAMToken master key is sent to <code>ApplicationMaster</code>
    * by <code>ResourceManager</code> via {@link RegisterApplicationMasterResponse}
    * , used to verify corresponding ClientToAMToken.</p>
+   * @return ClientToAMToken master key
    */
   @Public
   @Stable
@@ -119,6 +119,7 @@ public abstract class RegisterApplicationMasterResponse {
 
   /**
    * <p>Get the queue that the application was placed in.<p>
+   * @return the queue that the application was placed in.
    */
   @Public
   @Stable

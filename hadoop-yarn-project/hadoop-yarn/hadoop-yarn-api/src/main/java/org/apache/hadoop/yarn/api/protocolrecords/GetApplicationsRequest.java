@@ -34,7 +34,6 @@ import org.apache.hadoop.yarn.util.Records;
  * <p>The request from clients to get a report of Applications
  * in the cluster from the <code>ResourceManager</code>.</p>
  *
- *
  * @see ApplicationClientProtocol#getApplications(GetApplicationsRequest)
  */
 @Public
@@ -117,6 +116,7 @@ public abstract class GetApplicationsRequest {
    *
    * @param scope {@link ApplicationsRequestScope} to filter by
    * @see ApplicationClientProtocol#getApplications(GetApplicationsRequest)
+   * @return a report of Applications in {@link GetApplicationsRequest}
    */
   @Public
   @Stable
@@ -137,6 +137,7 @@ public abstract class GetApplicationsRequest {
    *
    *
    * @see ApplicationClientProtocol#getApplications(GetApplicationsRequest)
+   * @return a report of Applications in {@link GetApplicationsRequest}
    */
   @Public
   @Stable
@@ -157,6 +158,7 @@ public abstract class GetApplicationsRequest {
    *
    *
    * @see ApplicationClientProtocol#getApplications(GetApplicationsRequest)
+   * @return  a report of Applications in {@link GetApplicationsRequest}
    */
   @Public
   @Stable
@@ -177,6 +179,7 @@ public abstract class GetApplicationsRequest {
    *
    *
    * @see ApplicationClientProtocol#getApplications(GetApplicationsRequest)
+   * @return  a report of Applications in <code>GetApplicationsRequest</code>
    */
   @Public
   @Stable

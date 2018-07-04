@@ -18,8 +18,6 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -28,8 +26,10 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Evolving;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.server.resourcemanager.resource.ResourceType;
 import org.apache.hadoop.yarn.server.utils.BuilderUtils;
 import org.apache.hadoop.yarn.util.resource.Resources;
 
@@ -48,7 +48,17 @@ public class FairSchedulerConfiguration extends Configuration {
   public static final String RM_SCHEDULER_INCREMENT_ALLOCATION_VCORES =
     YarnConfiguration.YARN_PREFIX + "scheduler.increment-allocation-vcores";
   public static final int DEFAULT_RM_SCHEDULER_INCREMENT_ALLOCATION_VCORES = 1;
-  
+
+  /** Threshold for container size for making a container reservation as a
+   * multiple of increment allocation. Only container sizes above this are
+   * allowed to reserve a node */
+  public static final String
+      RM_SCHEDULER_RESERVATION_THRESHOLD_INCREMENT_MULTIPLE =
+      YarnConfiguration.YARN_PREFIX +
+          "scheduler.reservation-threshold.increment-multiple";
+  public static final float
+      DEFAULT_RM_SCHEDULER_RESERVATION_THRESHOLD_INCREMENT_MULTIPLE = 2f;
+
   private static final String CONF_PREFIX =  "yarn.scheduler.fair.";
 
   public static final String ALLOCATION_FILE = CONF_PREFIX + "allocation.file";
@@ -105,11 +115,23 @@ public class FairSchedulerConfiguration extends Configuration {
   protected static final String PREEMPTION_THRESHOLD =
       CONF_PREFIX + "preemption.cluster-utilization-threshold";
   protected static final float DEFAULT_PREEMPTION_THRESHOLD = 0.8f;
-  
-  protected static final String PREEMPTION_INTERVAL = CONF_PREFIX + "preemptionInterval";
-  protected static final int DEFAULT_PREEMPTION_INTERVAL = 5000;
+
   protected static final String WAIT_TIME_BEFORE_KILL = CONF_PREFIX + "waitTimeBeforeKill";
   protected static final int DEFAULT_WAIT_TIME_BEFORE_KILL = 15000;
+
+  /**
+   * Configurable delay (ms) before an app's starvation is considered after
+   * it is identified. This is to give the scheduler enough time to
+   * allocate containers post preemption. This delay is added to the
+   * {@link #WAIT_TIME_BEFORE_KILL} and enough heartbeats.
+   *
+   * This is intended to be a backdoor on production clusters, and hence
+   * intentionally not documented.
+   */
+  protected static final String WAIT_TIME_BEFORE_NEXT_STARVATION_CHECK_MS =
+      CONF_PREFIX + "waitTimeBeforeNextStarvationCheck";
+  protected static final long
+      DEFAULT_WAIT_TIME_BEFORE_NEXT_STARVATION_CHECK_MS = 10000;
 
   /** Whether to assign multiple containers in one check-in. */
   public static final String  ASSIGN_MULTIPLE = CONF_PREFIX + "assignmultiple";
@@ -120,6 +142,14 @@ public class FairSchedulerConfiguration extends Configuration {
   protected static final boolean DEFAULT_SIZE_BASED_WEIGHT = false;
 
   /** Maximum number of containers to assign on each check-in. */
+  public static final String DYNAMIC_MAX_ASSIGN =
+      CONF_PREFIX + "dynamic.max.assign";
+  private static final boolean DEFAULT_DYNAMIC_MAX_ASSIGN = true;
+
+  /**
+   * Specify exact number of containers to assign on each heartbeat, if dynamic
+   * max assign is turned off.
+   */
   protected static final String MAX_ASSIGN = CONF_PREFIX + "max.assign";
   protected static final int DEFAULT_MAX_ASSIGN = -1;
 
@@ -127,6 +157,11 @@ public class FairSchedulerConfiguration extends Configuration {
   public static final String UPDATE_INTERVAL_MS =
       CONF_PREFIX + "update-interval-ms";
   public static final int DEFAULT_UPDATE_INTERVAL_MS = 500;
+
+  /** Ratio of nodes available for an app to make an reservation on. */
+  public static final String RESERVABLE_NODES =
+          CONF_PREFIX + "reservable-nodes";
+  public static final float RESERVABLE_NODES_DEFAULT = 0.05f;
 
   public FairSchedulerConfiguration() {
     super();
@@ -165,7 +200,13 @@ public class FairSchedulerConfiguration extends Configuration {
       DEFAULT_RM_SCHEDULER_INCREMENT_ALLOCATION_VCORES);
     return Resources.createResource(incrementMemory, incrementCores);
   }
-  
+
+  public float getReservationThresholdIncrementMultiple() {
+    return getFloat(
+      RM_SCHEDULER_RESERVATION_THRESHOLD_INCREMENT_MULTIPLE,
+      DEFAULT_RM_SCHEDULER_RESERVATION_THRESHOLD_INCREMENT_MULTIPLE);
+  }
+
   public float getLocalityThresholdNode() {
     return getFloat(LOCALITY_THRESHOLD_NODE, DEFAULT_LOCALITY_THRESHOLD_NODE);
   }
@@ -202,6 +243,10 @@ public class FairSchedulerConfiguration extends Configuration {
     return getBoolean(ASSIGN_MULTIPLE, DEFAULT_ASSIGN_MULTIPLE);
   }
 
+  public boolean isMaxAssignDynamic() {
+    return getBoolean(DYNAMIC_MAX_ASSIGN, DEFAULT_DYNAMIC_MAX_ASSIGN);
+  }
+
   public int getMaxAssign() {
     return getInt(MAX_ASSIGN, DEFAULT_MAX_ASSIGN);
   }
@@ -219,8 +264,9 @@ public class FairSchedulerConfiguration extends Configuration {
     		"/tmp/")).getAbsolutePath() + File.separator + "fairscheduler");
   }
   
-  public int getPreemptionInterval() {
-    return getInt(PREEMPTION_INTERVAL, DEFAULT_PREEMPTION_INTERVAL);
+  public long getWaitTimeBeforeNextStarvationCheck() {
+    return getLong(WAIT_TIME_BEFORE_NEXT_STARVATION_CHECK_MS,
+        DEFAULT_WAIT_TIME_BEFORE_NEXT_STARVATION_CHECK_MS);
   }
   
   public int getWaitTimeBeforeKill() {
@@ -232,24 +278,70 @@ public class FairSchedulerConfiguration extends Configuration {
         YarnConfiguration.DEFAULT_RM_SCHEDULER_USE_PORT_FOR_NODE_NAME);
   }
 
+  public float getReservableNodes() {
+    return getFloat(RESERVABLE_NODES, RESERVABLE_NODES_DEFAULT);
+  }
+
   /**
    * Parses a resource config value of a form like "1024", "1024 mb",
    * or "1024 mb, 3 vcores". If no units are given, megabytes are assumed.
    * 
    * @throws AllocationConfigurationException
    */
-  public static Resource parseResourceConfigValue(String val)
+  public static ConfigurableResource parseResourceConfigValue(String val)
       throws AllocationConfigurationException {
+    ConfigurableResource configurableResource;
     try {
-      int memory = findResource(val, "mb");
-      int vcores = findResource(val, "vcores");
-      return BuilderUtils.newResource(memory, vcores);
+      val = StringUtils.toLowerCase(val);
+      if (val.contains("%")) {
+        configurableResource = new ConfigurableResource(
+            getResourcePercentage(val));
+      } else {
+        int memory = findResource(val, "mb");
+        int vcores = findResource(val, "vcores");
+        configurableResource = new ConfigurableResource(
+            BuilderUtils.newResource(memory, vcores));
+      }
     } catch (AllocationConfigurationException ex) {
       throw ex;
     } catch (Exception ex) {
       throw new AllocationConfigurationException(
           "Error reading resource config", ex);
     }
+    return configurableResource;
+  }
+
+  private static double[] getResourcePercentage(
+      String val) throws AllocationConfigurationException {
+    double[] resourcePercentage = new double[ResourceType.values().length];
+    String[] strings = val.split(",");
+    if (strings.length == 1) {
+      double percentage = findPercentage(strings[0], "");
+      for (int i = 0; i < ResourceType.values().length; i++) {
+        resourcePercentage[i] = percentage/100;
+      }
+    } else {
+      resourcePercentage[0] = findPercentage(val, "memory")/100;
+      resourcePercentage[1] = findPercentage(val, "cpu")/100;
+    }
+    return resourcePercentage;
+  }
+
+  private static double findPercentage(String val, String units)
+    throws AllocationConfigurationException {
+    final Pattern pattern =
+        Pattern.compile("((\\d+)(\\.\\d*)?)\\s*%\\s*" + units);
+    Matcher matcher = pattern.matcher(val);
+    if (!matcher.find()) {
+      if (units.equals("")) {
+        throw new AllocationConfigurationException("Invalid percentage: " +
+            val);
+      } else {
+        throw new AllocationConfigurationException("Missing resource: " +
+            units);
+      }
+    }
+    return Double.parseDouble(matcher.group(1));
   }
 
   public long getUpdateInterval() {
@@ -257,8 +349,8 @@ public class FairSchedulerConfiguration extends Configuration {
   }
   
   private static int findResource(String val, String units)
-    throws AllocationConfigurationException {
-    Pattern pattern = Pattern.compile("(\\d+) ?" + units);
+      throws AllocationConfigurationException {
+    final Pattern pattern = Pattern.compile("(\\d+)(\\.\\d*)?\\s*" + units);
     Matcher matcher = pattern.matcher(val);
     if (!matcher.find()) {
       throw new AllocationConfigurationException("Missing resource: " + units);

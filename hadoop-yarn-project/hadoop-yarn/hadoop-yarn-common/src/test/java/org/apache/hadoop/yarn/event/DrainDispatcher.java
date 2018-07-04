@@ -17,34 +17,48 @@
 */
 package org.apache.hadoop.yarn.event;
 
+import org.apache.hadoop.conf.Configuration;
+
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 @SuppressWarnings("rawtypes")
 public class DrainDispatcher extends AsyncDispatcher {
-
-// flagrant initialize abuse throughout, but safe per
-// http://java.sun.com/docs/books/jls/third_edition/html/typesValues.html#96595
-// and similar grotesqueries
   private volatile boolean drained = false;
   private final BlockingQueue<Event> queue;
-  final Object mutex;
+  private final Object mutex;
 
   public DrainDispatcher() {
     this(new LinkedBlockingQueue<Event>());
   }
 
-  private DrainDispatcher(BlockingQueue<Event> eventQueue) {
+  public DrainDispatcher(BlockingQueue<Event> eventQueue) {
     super(eventQueue);
     this.queue = eventQueue;
     this.mutex = this;
+  }
+
+  @Override
+  public void serviceInit(Configuration conf)
+      throws Exception {
+    conf.setBoolean(Dispatcher.DISPATCHER_EXIT_ON_ERROR_KEY, false);
+    super.serviceInit(conf);
+  }
+
+  /**
+   *  Wait till event thread enters WAITING state (i.e. waiting for new events).
+   */
+  public void waitForEventThreadToWait() {
+    while (!isEventThreadWaiting()) {
+      Thread.yield();
+    }
   }
 
   /**
    * Busy loop waiting for all queued events to drain.
    */
   public void await() {
-    while (!drained) {
+    while (!isDrained()) {
       Thread.yield();
     }
   }
@@ -54,7 +68,7 @@ public class DrainDispatcher extends AsyncDispatcher {
     return new Runnable() {
       @Override
       public void run() {
-        while (!Thread.currentThread().isInterrupted()) {
+        while (!isStopped() && !Thread.currentThread().isInterrupted()) {
           synchronized (mutex) {
             // !drained if dispatch queued new events on this dispatcher
             drained = queue.isEmpty();
@@ -62,7 +76,7 @@ public class DrainDispatcher extends AsyncDispatcher {
           Event event;
           try {
             event = queue.take();
-          } catch(InterruptedException ie) {
+          } catch (InterruptedException ie) {
             return;
           }
           if (event != null) {
@@ -73,6 +87,7 @@ public class DrainDispatcher extends AsyncDispatcher {
     };
   }
 
+  @SuppressWarnings("unchecked")
   @Override
   public EventHandler getEventHandler() {
     final EventHandler actual = super.getEventHandler();
@@ -87,4 +102,10 @@ public class DrainDispatcher extends AsyncDispatcher {
     };
   }
 
+  @Override
+  protected boolean isDrained() {
+    synchronized (mutex) {
+      return drained;
+    }
+  }
 }

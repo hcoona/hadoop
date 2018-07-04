@@ -18,13 +18,14 @@
 
 package org.apache.hadoop.yarn.server.resourcemanager;
 
+import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.AbstractYarnScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairSchedulerConfiguration;
 
-
-import org.junit.Before;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
@@ -32,8 +33,9 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 
 @RunWith(Parameterized.class)
 public abstract class ParameterizedSchedulerTestBase {
@@ -42,38 +44,51 @@ public abstract class ParameterizedSchedulerTestBase {
   private final static String FS_ALLOC_FILE =
       new File(TEST_DIR, "test-fs-queues.xml").getAbsolutePath();
 
-  private SchedulerType schedulerType;
-  private YarnConfiguration conf = null;
-
   public enum SchedulerType {
     CAPACITY, FAIR
   }
 
-  public ParameterizedSchedulerTestBase(SchedulerType type) {
-    schedulerType = type;
+  @Parameterized.Parameters(name = "{0}")
+  public static Collection<Object[]> getParameters() {
+    List<Object[]> params = new ArrayList<>(SchedulerType.values().length);
+    for (SchedulerType type : SchedulerType.values()) {
+      params.add(new Object[]{ type });
+    }
+    return params;
   }
+
+  private SchedulerType schedulerType;
+  private YarnConfiguration conf = null;
+  private AbstractYarnScheduler scheduler = null;
 
   public YarnConfiguration getConf() {
     return conf;
   }
 
-  @Parameterized.Parameters
-  public static Collection<SchedulerType[]> getParameters() {
-    return Arrays.asList(new SchedulerType[][]{
-        {SchedulerType.CAPACITY}, {SchedulerType.FAIR}});
-  }
-
-  @Before
-  public void configureScheduler() throws IOException {
+  // Due to parameterization, this gets called before each test method
+  public ParameterizedSchedulerTestBase(SchedulerType type)
+      throws IOException {
     conf = new YarnConfiguration();
+
+    QueueMetrics.clearQueueMetrics();
+    DefaultMetricsSystem.setMiniClusterMode(true);
+
+    schedulerType = type;
     switch (schedulerType) {
+      case FAIR:
+        configureFairScheduler(conf);
+        scheduler = new FairScheduler();
+        conf.set(YarnConfiguration.RM_SCHEDULER,
+            FairScheduler.class.getName());
+        break;
       case CAPACITY:
+        scheduler = new CapacityScheduler();
+        ((CapacityScheduler)scheduler).setConf(conf);
         conf.set(YarnConfiguration.RM_SCHEDULER,
             CapacityScheduler.class.getName());
         break;
-      case FAIR:
-        configureFairScheduler(conf);
-        break;
+      default:
+        throw new IllegalArgumentException("Invalid type: " + type);
     }
   }
 
@@ -83,10 +98,38 @@ public abstract class ParameterizedSchedulerTestBase {
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
     out.println("<queueMaxAMShareDefault>-1.0</queueMaxAMShareDefault>");
+    out.println("<defaultQueueSchedulingPolicy>fair</defaultQueueSchedulingPolicy>");
+    out.println("<queue name=\"root\">");
+    out.println("  <schedulingPolicy>drf</schedulingPolicy>");
+    out.println("  <weight>1.0</weight>");
+    out.println("  <fairSharePreemptionTimeout>100</fairSharePreemptionTimeout>");
+    out.println("  <minSharePreemptionTimeout>120</minSharePreemptionTimeout>");
+    out.println("  <fairSharePreemptionThreshold>.5</fairSharePreemptionThreshold>");
+    out.println("</queue>");
     out.println("</allocations>");
     out.close();
 
-    conf.set(YarnConfiguration.RM_SCHEDULER, FairScheduler.class.getName());
     conf.set(FairSchedulerConfiguration.ALLOCATION_FILE, FS_ALLOC_FILE);
+    conf.setLong(FairSchedulerConfiguration.UPDATE_INTERVAL_MS, 10);
+  }
+
+  public SchedulerType getSchedulerType() {
+    return schedulerType;
+  }
+
+  /**
+   * Return a scheduler configured by {@code YarnConfiguration.RM_SCHEDULER}
+   *
+   * <p>The scheduler is configured by
+   * {@link #ParameterizedSchedulerTestBase(SchedulerType)}.
+   * Client test code can obtain the scheduler with this getter method.
+   * Schedulers supported by this class are {@link FairScheduler} or
+   * {@link CapacityScheduler}. </p>
+   *
+   * @return   The scheduler configured by
+   *           {@code YarnConfiguration.RM_SCHEDULER}
+   */
+  public AbstractYarnScheduler getScheduler() {
+    return scheduler;
   }
 }

@@ -19,9 +19,13 @@
 
 # Introduction and concepts
 
-This document describes a YARN service registry built to address a problem:
-*how can clients talk to YARN-deployed services and the components which form
-such services?*
+This document describes a YARN service registry built to address two problems:
+
+1. How can clients talk to YARN-deployed services and the components which form
+such services?
+1. Allow Hadoop core services to be registered and discovered thereby
+reducing configuration parameters and to allow core services to be more
+easily moved.
 
 Service registration and discovery is a long-standing problem in distributed
 computing, dating back to Xerox's Grapevine Service. This proposal is for a
@@ -80,7 +84,7 @@ container ID.
 
 ## The binding problem
 Hadoop YARN allows applications to run on the Hadoop cluster. Some of these are
-batch jobs or queries that can managed via Yarn’s existing API using its
+batch jobs or queries that can managed via YARN’s existing API using its
 application ID. In addition YARN can deploy ong-lived services instances such a
 pool of Apache Tomcat web servers or an Apache HBase cluster. YARN will deploy
 them across the cluster depending on the individual each component requirements
@@ -117,7 +121,7 @@ services accessible from within the Hadoop cluster
         /services/yarn
         /services/oozie
 
-Yarn-deployed services belonging to individual users.
+YARN-deployed services belonging to individual users.
 
         /users/joe/org-apache-hbase/demo1
         /users/joe/org-apache-hbase/demo1/components/regionserver1
@@ -144,7 +148,7 @@ their application master, to which they heartbeat regularly.
 
 ## Unsupported Registration use cases:
 
-1. A short-lived Yarn application is registered automatically in the registry,
+1. A short-lived YARN application is registered automatically in the registry,
 including all its containers. and unregistered when the job terminates.
 Short-lived applications with many containers will place excessive load on a
 registry. All YARN applications will be given the option of registering, but it
@@ -255,7 +259,7 @@ service since it supports many of the properties, We pick a part of the ZK
 namespace to be the root of the service registry ( default: `yarnRegistry`).
 
 On top this base implementation we build our registry service API and the
-naming conventions that Yarn will use for its services. The registry will be
+naming conventions that YARN will use for its services. The registry will be
 accessed by the registry API, not directly via ZK - ZK is just an
 implementation choice (although unlikely to change in the future).
 
@@ -293,7 +297,7 @@ them.
 6. Core services will be registered using the following convention:
 `/services/{servicename}` e.g. `/services/hdfs`.
 
-7. Yarn services SHOULD be registered using the following convention:
+7. YARN services SHOULD be registered using the following convention:
 
         /users/{username}/{serviceclass}/{instancename}
 
@@ -346,31 +350,32 @@ A Service Record contains some basic informations and two lists of endpoints:
 one list for users of a service, one list for internal use within the
 application.
 
+<table>
+  <tr>
+    <td>Name</td>
+    <td>Description</td>
+  </tr>
+  <tr>
+    <td>type: String</td>
+    <td>Always: "JSONServiceRecord"</td>
+  </tr>
+  <tr>
+    <td>description: String</td>
+    <td>Human-readable description.</td>
+  </tr>
+  <tr>
+    <td>external: List[Endpoint]</td>
+    <td>A list of service endpoints for external callers.</td>
+  </tr>
+  <tr>
+    <td>internal: List[Endpoint]</td>
+    <td>A list of service endpoints for internal use within the service instance.</td>
+  </tr>
+</table>
 
-    <table>
-      <tr>
-        <td>Name</td>
-        <td>Description</td>
-      </tr>
-      <tr>
-        <td>type: String</td>
-        <td>Always: "JSONServiceRecord"</td>
-      </tr>
-      <tr>
-        <td>description: String</td>
-        <td>Human-readable description.</td>
-      </tr>
-      <tr>
-        <td>external: List[Endpoint]</td>
-        <td>A list of service endpoints for external callers.</td>
-      </tr>
-      <tr>
-        <td>internal: List[Endpoint]</td>
-        <td>A list of service endpoints for internal use within the service instance.</td>
-      </tr>
-    </table>
-
-The type field MUST be `"JSONServiceRecord"`. Mandating this string allows future record types *and* permits rapid rejection of byte arrays that lack this string before attempting JSON parsing.
+The type field MUST be `"JSONServiceRecord"`. Mandating this string allows
+future record types *and* permits rapid rejection of byte arrays that
+lack this string before attempting to parse the data with a JSON parser.
 
 ### YARN Persistence policies
 
@@ -379,8 +384,15 @@ as an application, attempt or container is completed.
 
 This allows service to register entries which have a lifespan bound to one of
 these aspects of YARN applications' lifecycles. This is a feature which is only
-supported when the RM has enabled its support, and would not apply to
-any use of the registry without the RM's participation.
+supported when the RM has had its registry integration enabled via the
+configuration option `hadoop.registry.rm.enabled`.
+
+If this option is enabled, and the YARN resource manager is running,
+it will clean up service records as defined
+below.
+
+If the option is disabled, the RM does not provide any registry support at all.
+
 
 The attributes, `yarn:id` and `yarn:persistence` specify which records
 *and any child entries* may be deleted as the associated YARN components complete.
@@ -811,8 +823,8 @@ The `RegistryPathStatus` class summarizes the contents of a node in the registry
 ## Security
 
 The registry will allow a service instance can only be registered under the
-path where it has permissions. Yarn will create directories with appropriate
-permissions for users where Yarn deployed services can be registered by a user.
+path where it has permissions. YARN will create directories with appropriate
+permissions for users where YARN deployed services can be registered by a user.
 of the user account of the service instance. The admin will also create
 directories (such as `/services`) with appropriate permissions (where core Hadoop
 services can register themselves.
@@ -1006,7 +1018,8 @@ The details are irrelevant —note that they use an application-specific API
 value to ensure uniqueness.
 
 Internal:
-1. Two URLS to REST APIs offered by the AM for containers deployed by
+
+1. Two URLs to REST APIs offered by the AM for containers deployed by
  the application itself.
 
 Python agents running in the containers retrieve the internal endpoint

@@ -17,23 +17,25 @@
 */
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Map.Entry;
+import java.util.Set;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.nodelabels.CommonNodeLabelsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceUsage;
 import org.apache.hadoop.yarn.server.utils.Lock;
 import org.apache.hadoop.yarn.util.resource.ResourceCalculator;
 import org.apache.hadoop.yarn.util.resource.Resources;
 
+import com.google.common.collect.Sets;
+
 class CSQueueUtils {
-  
-  private static final Log LOG = LogFactory.getLog(CSQueueUtils.class);
 
   final static float EPSILON = 0.0001f;
   
+  /*
+   * Used only by tests
+   */
   public static void checkMaxCapacity(String queueName, 
       float capacity, float maximumCapacity) {
     if (maximumCapacity < 0.0f || maximumCapacity > 1.0f) {
@@ -43,6 +45,9 @@ class CSQueueUtils {
     }
     }
 
+  /*
+   * Used only by tests
+   */
   public static void checkAbsoluteCapacity(String queueName,
       float absCapacity, float absMaxCapacity) {
     if (absMaxCapacity < (absCapacity - EPSILON)) {
@@ -53,19 +58,33 @@ class CSQueueUtils {
   }
   }
   
-  public static void checkAbsoluteCapacitiesByLabel(String queueName,
-          Map<String, Float> absCapacities,
-          Map<String, Float> absMaximumCapacities) {
-    for (Entry<String, Float> entry : absCapacities.entrySet()) {
-      String label = entry.getKey();
-      float absCapacity = entry.getValue();
-      float absMaxCapacity = absMaximumCapacities.get(label);
-      if (absMaxCapacity < (absCapacity - EPSILON)) {
-        throw new IllegalArgumentException("Illegal call to setMaxCapacity. "
-            + "Queue '" + queueName + "' has " + "an absolute capacity ("
-            + absCapacity + ") greater than "
-            + "its absolute maximumCapacity (" + absMaxCapacity + ") of label="
-            + label);
+  /**
+   * Check sanity of capacities:
+   * - capacity <= maxCapacity
+   * - absCapacity <= absMaximumCapacity
+   */
+  private static void capacitiesSanityCheck(String queueName,
+      QueueCapacities queueCapacities) {
+    for (String label : queueCapacities.getExistingNodeLabels()) {
+      float capacity = queueCapacities.getCapacity(label);
+      float maximumCapacity = queueCapacities.getMaximumCapacity(label);
+      if (capacity > maximumCapacity) {
+        throw new IllegalArgumentException("Illegal queue capacity setting, "
+            + "(capacity=" + capacity + ") > (maximum-capacity="
+            + maximumCapacity + "). When label=[" + label + "]");
+      }
+     
+      // Actually, this may not needed since we have verified capacity <=
+      // maximumCapacity. And the way we compute absolute capacity (abs(x) =
+      // cap(x) * cap(x.parent) * ...) is a monotone increasing function. But
+      // just keep it here to make sure our compute abs capacity method works
+      // correctly. 
+      float absCapacity = queueCapacities.getAbsoluteCapacity(label);
+      float absMaxCapacity = queueCapacities.getAbsoluteMaximumCapacity(label);
+      if (absCapacity > absMaxCapacity) {
+        throw new IllegalArgumentException("Illegal queue capacity setting, "
+            + "(abs-capacity=" + absCapacity + ") > (abs-maximum-capacity="
+            + absMaxCapacity + "). When label=[" + label + "]");
       }
     }
   }
@@ -77,146 +96,213 @@ class CSQueueUtils {
     return (parentAbsMaxCapacity * maximumCapacity);
   }
   
-  public static Map<String, Float> computeAbsoluteCapacityByNodeLabels(
-      Map<String, Float> nodeLabelToCapacities, CSQueue parent) {
-    if (parent == null) {
-      return nodeLabelToCapacities;
-    }
-    
-    Map<String, Float> absoluteCapacityByNodeLabels =
-        new HashMap<String, Float>();
-    for (Entry<String, Float> entry : nodeLabelToCapacities.entrySet()) {
-      String label = entry.getKey();
-      float capacity = entry.getValue();
-      absoluteCapacityByNodeLabels.put(label,
-          capacity * parent.getAbsoluteCapacityByNodeLabel(label));
-    }
-    return absoluteCapacityByNodeLabels;
-  }
-  
-  public static Map<String, Float> computeAbsoluteMaxCapacityByNodeLabels(
-      Map<String, Float> maximumNodeLabelToCapacities, CSQueue parent) {
-    if (parent == null) {
-      return maximumNodeLabelToCapacities;
-    }
-    Map<String, Float> absoluteMaxCapacityByNodeLabels =
-        new HashMap<String, Float>();
-    for (Entry<String, Float> entry : maximumNodeLabelToCapacities.entrySet()) {
-      String label = entry.getKey();
-      float maxCapacity = entry.getValue();
-      absoluteMaxCapacityByNodeLabels.put(label,
-          maxCapacity * parent.getAbsoluteMaximumCapacityByNodeLabel(label));
-    }
-    return absoluteMaxCapacityByNodeLabels;
+  /**
+   * This method intends to be used by ReservationQueue, ReservationQueue will
+   * not appear in configuration file, so we shouldn't do load capacities
+   * settings in configuration for reservation queue.
+   */
+  public static void updateAndCheckCapacitiesByLabel(String queuePath,
+      QueueCapacities queueCapacities, QueueCapacities parentQueueCapacities) {
+    updateAbsoluteCapacitiesByNodeLabels(queueCapacities, parentQueueCapacities);
+
+    capacitiesSanityCheck(queuePath, queueCapacities);
   }
 
-  public static int computeMaxActiveApplications(
-      ResourceCalculator calculator,
-      Resource clusterResource, Resource minimumAllocation, 
-      float maxAMResourcePercent, float absoluteMaxCapacity) {
-    return
-        Math.max(
-            (int)Math.ceil(
-                Resources.ratio(
-                    calculator, 
-                    clusterResource, 
-                    minimumAllocation) * 
-                    maxAMResourcePercent * absoluteMaxCapacity
-                ), 
-            1);
-  }
+  /**
+   * Do following steps for capacities
+   * - Load capacities from configuration
+   * - Update absolute capacities for new capacities
+   * - Check if capacities/absolute-capacities legal
+   */
+  public static void loadUpdateAndCheckCapacities(String queuePath,
+      CapacitySchedulerConfiguration csConf,
+      QueueCapacities queueCapacities, QueueCapacities parentQueueCapacities) {
+    loadCapacitiesByLabelsFromConf(queuePath,
+        queueCapacities, csConf);
 
-  public static int computeMaxActiveApplicationsPerUser(
-      int maxActiveApplications, int userLimit, float userLimitFactor) {
-    return Math.max(
-        (int)Math.ceil(
-            maxActiveApplications * (userLimit / 100.0f) * userLimitFactor),
-        1);
+    updateAbsoluteCapacitiesByNodeLabels(queueCapacities, parentQueueCapacities);
+
+    capacitiesSanityCheck(queuePath, queueCapacities);
   }
   
-  @Lock(CSQueue.class)
-  public static void updateQueueStatistics(
-      final ResourceCalculator calculator,
-      final CSQueue childQueue, final CSQueue parentQueue, 
-      final Resource clusterResource, final Resource minimumAllocation) {
-    Resource queueLimit = Resources.none();
-    Resource usedResources = childQueue.getUsedResources();
-    
+  private static void loadCapacitiesByLabelsFromConf(String queuePath,
+      QueueCapacities queueCapacities, CapacitySchedulerConfiguration csConf) {
+    queueCapacities.clearConfigurableFields();
+    Set<String> configuredNodelabels =
+        csConf.getConfiguredNodeLabels(queuePath);
+
+    for (String label : configuredNodelabels) {
+      if (label.equals(CommonNodeLabelsManager.NO_LABEL)) {
+        queueCapacities.setCapacity(CommonNodeLabelsManager.NO_LABEL,
+            csConf.getNonLabeledQueueCapacity(queuePath) / 100);
+        queueCapacities.setMaximumCapacity(CommonNodeLabelsManager.NO_LABEL,
+            csConf.getNonLabeledQueueMaximumCapacity(queuePath) / 100);
+        queueCapacities.setMaxAMResourcePercentage(
+            CommonNodeLabelsManager.NO_LABEL,
+            csConf.getMaximumAMResourcePercentPerPartition(queuePath, label));
+      } else {
+        queueCapacities.setCapacity(label,
+            csConf.getLabeledQueueCapacity(queuePath, label) / 100);
+        queueCapacities.setMaximumCapacity(label,
+            csConf.getLabeledQueueMaximumCapacity(queuePath, label) / 100);
+        queueCapacities.setMaxAMResourcePercentage(label,
+            csConf.getMaximumAMResourcePercentPerPartition(queuePath, label));
+      }
+    }
+  }
+  
+  // Set absolute capacities for {capacity, maximum-capacity}
+  private static void updateAbsoluteCapacitiesByNodeLabels(
+      QueueCapacities queueCapacities, QueueCapacities parentQueueCapacities) {
+    for (String label : queueCapacities.getExistingNodeLabels()) {
+      float capacity = queueCapacities.getCapacity(label);
+      if (capacity > 0f) {
+        queueCapacities.setAbsoluteCapacity(
+            label,
+            capacity
+                * (parentQueueCapacities == null ? 1 : parentQueueCapacities
+                    .getAbsoluteCapacity(label)));
+      }
+
+      float maxCapacity = queueCapacities.getMaximumCapacity(label);
+      if (maxCapacity > 0f) {
+        queueCapacities.setAbsoluteMaximumCapacity(
+            label,
+            maxCapacity
+                * (parentQueueCapacities == null ? 1 : parentQueueCapacities
+                    .getAbsoluteMaximumCapacity(label)));
+      }
+    }
+  }
+  
+  /**
+   * Update partitioned resource usage, if nodePartition == null, will update
+   * used resource for all partitions of this queue.
+   */
+  public static void updateUsedCapacity(final ResourceCalculator rc,
+      final Resource totalPartitionResource, String nodePartition,
+      AbstractCSQueue childQueue) {
+    QueueCapacities queueCapacities = childQueue.getQueueCapacities();
+    CSQueueMetrics queueMetrics = childQueue.getMetrics();
+    ResourceUsage queueResourceUsage = childQueue.getQueueResourceUsage();
+    Resource minimumAllocation = childQueue.getMinimumAllocation();
     float absoluteUsedCapacity = 0.0f;
     float usedCapacity = 0.0f;
+    float reservedCapacity = 0.0f;
+    float absoluteReservedCapacity = 0.0f;
 
-    if (Resources.greaterThan(
-        calculator, clusterResource, clusterResource, Resources.none())) {
-      queueLimit = 
-          Resources.multiply(clusterResource, childQueue.getAbsoluteCapacity());
-      absoluteUsedCapacity = 
-          Resources.divide(calculator, clusterResource, 
-              usedResources, clusterResource);
-      usedCapacity = 
-          Resources.equals(queueLimit, Resources.none()) ? 0 :
-          Resources.divide(calculator, clusterResource, 
-              usedResources, queueLimit);
+    if (Resources.greaterThan(rc, totalPartitionResource,
+        totalPartitionResource, Resources.none())) {
+      // queueGuaranteed = totalPartitionedResource *
+      // absolute_capacity(partition)
+      Resource queueGuranteedResource =
+          Resources.multiply(totalPartitionResource,
+              queueCapacities.getAbsoluteCapacity(nodePartition));
+
+      // make queueGuranteed >= minimum_allocation to avoid divided by 0.
+      queueGuranteedResource =
+          Resources.max(rc, totalPartitionResource, queueGuranteedResource,
+              minimumAllocation);
+
+      Resource usedResource = queueResourceUsage.getUsed(nodePartition);
+      absoluteUsedCapacity =
+          Resources.divide(rc, totalPartitionResource, usedResource,
+              totalPartitionResource);
+      usedCapacity =
+          Resources.divide(rc, totalPartitionResource, usedResource,
+              queueGuranteedResource);
+
+      Resource resResource = queueResourceUsage.getReserved(nodePartition);
+      reservedCapacity =
+          Resources.divide(rc, totalPartitionResource, resResource,
+              queueGuranteedResource);
+      absoluteReservedCapacity =
+          Resources.divide(rc, totalPartitionResource, resResource,
+              totalPartitionResource);
     }
 
-    childQueue.setUsedCapacity(usedCapacity);
-    childQueue.setAbsoluteUsedCapacity(absoluteUsedCapacity);
-    
-    Resource available = Resources.subtract(queueLimit, usedResources);
-    childQueue.getMetrics().setAvailableResourcesToQueue(
-        Resources.max(
-            calculator, 
-            clusterResource, 
-            available, 
-            Resources.none()
-            )
-        );
-   }
+    queueCapacities
+        .setAbsoluteUsedCapacity(nodePartition, absoluteUsedCapacity);
+    queueCapacities.setUsedCapacity(nodePartition, usedCapacity);
+    queueCapacities.setReservedCapacity(nodePartition, reservedCapacity);
+    queueCapacities
+        .setAbsoluteReservedCapacity(nodePartition, absoluteReservedCapacity);
 
-   public static float getAbsoluteMaxAvailCapacity(
-      ResourceCalculator resourceCalculator, Resource clusterResource, CSQueue queue) {
-      CSQueue parent = queue.getParent();
-      if (parent == null) {
-        return queue.getAbsoluteMaximumCapacity();
+    // QueueMetrics does not support per-label capacities,
+    // so we report values only for the default partition.
+
+    queueMetrics.setUsedCapacity(nodePartition,
+        queueCapacities.getUsedCapacity(RMNodeLabelsManager.NO_LABEL));
+    queueMetrics.setAbsoluteUsedCapacity(nodePartition,
+        queueCapacities.getAbsoluteUsedCapacity(
+            RMNodeLabelsManager.NO_LABEL));
+
+  }
+
+  private static Resource getMaxAvailableResourceToQueue(
+      final ResourceCalculator rc, RMNodeLabelsManager nlm, CSQueue queue,
+      Resource cluster) {
+    Set<String> nodeLabels = queue.getNodeLabelsForQueue();
+    Resource totalAvailableResource = Resources.createResource(0, 0);
+
+    for (String partition : nodeLabels) {
+      // Calculate guaranteed resource for a label in a queue by below logic.
+      // (total label resource) * (absolute capacity of label in that queue)
+      Resource queueGuranteedResource = Resources.multiply(nlm
+          .getResourceByLabel(partition, cluster), queue.getQueueCapacities()
+          .getAbsoluteCapacity(partition));
+
+      // Available resource in queue for a specific label will be calculated as
+      // {(guaranteed resource for a label in a queue) -
+      // (resource usage of that label in the queue)}
+      // Finally accumulate this available resource to get total.
+      Resource available = (Resources.greaterThan(rc, cluster,
+          queueGuranteedResource,
+          queue.getQueueResourceUsage().getUsed(partition))) ? Resources
+          .componentwiseMax(Resources.subtractFrom(queueGuranteedResource,
+              queue.getQueueResourceUsage().getUsed(partition)), Resources
+              .none()) : Resources.none();
+      Resources.addTo(totalAvailableResource, available);
+    }
+    return totalAvailableResource;
+  }
+
+  /**
+   * <p>
+   * Update Queue Statistics:
+   * </p>
+   *  
+   * <li>used-capacity/absolute-used-capacity by partition</li> 
+   * <li>non-partitioned max-avail-resource to queue</li>
+   * 
+   * <p>
+   * When nodePartition is null, all partition of
+   * used-capacity/absolute-used-capacity will be updated.
+   * </p>
+   */
+  @Lock(CSQueue.class)
+  public static void updateQueueStatistics(
+      final ResourceCalculator rc, final Resource cluster,
+      final AbstractCSQueue childQueue, final RMNodeLabelsManager nlm,
+      final String nodePartition) {
+    QueueCapacities queueCapacities = childQueue.getQueueCapacities();
+    ResourceUsage queueResourceUsage = childQueue.getQueueResourceUsage();
+
+    if (nodePartition == null) {
+      for (String partition : Sets.union(
+          queueCapacities.getNodePartitionsSet(),
+          queueResourceUsage.getNodePartitionsSet())) {
+        updateUsedCapacity(rc, nlm.getResourceByLabel(partition, cluster),
+            partition, childQueue);
       }
+    } else {
+      updateUsedCapacity(rc, nlm.getResourceByLabel(nodePartition, cluster),
+          nodePartition, childQueue);
+    }
 
-      //Get my parent's max avail, needed to determine my own
-      float parentMaxAvail = getAbsoluteMaxAvailCapacity(
-        resourceCalculator, clusterResource, parent);
-      //...and as a resource
-      Resource parentResource = Resources.multiply(clusterResource, parentMaxAvail);
-
-      //check for no resources parent before dividing, if so, max avail is none
-      if (Resources.isInvalidDivisor(resourceCalculator, parentResource)) {
-        return 0.0f;
-      }
-      //sibling used is parent used - my used...
-      float siblingUsedCapacity = Resources.ratio(
-                 resourceCalculator,
-                 Resources.subtract(parent.getUsedResources(), queue.getUsedResources()),
-                 parentResource);
-      //my max avail is the lesser of my max capacity and what is unused from my parent
-      //by my siblings (if they are beyond their base capacity)
-      float maxAvail = Math.min(
-        queue.getMaximumCapacity(),
-        1.0f - siblingUsedCapacity);
-      //and, mutiply by parent to get absolute (cluster relative) value
-      float absoluteMaxAvail = maxAvail * parentMaxAvail;
-
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("qpath " + queue.getQueuePath());
-        LOG.debug("parentMaxAvail " + parentMaxAvail);
-        LOG.debug("siblingUsedCapacity " + siblingUsedCapacity);
-        LOG.debug("getAbsoluteMaximumCapacity " + queue.getAbsoluteMaximumCapacity());
-        LOG.debug("maxAvail " + maxAvail);
-        LOG.debug("absoluteMaxAvail " + absoluteMaxAvail);
-      }
-
-      if (absoluteMaxAvail < 0.0f) {
-        absoluteMaxAvail = 0.0f;
-      } else if (absoluteMaxAvail > 1.0f) {
-        absoluteMaxAvail = 1.0f;
-      }
-
-      return absoluteMaxAvail;
+    // Update queue metrics w.r.t node labels. In a generic way, we can
+    // calculate available resource from all labels in cluster.
+    childQueue.getMetrics().setAvailableResourcesToQueue(nodePartition,
+        getMaxAvailableResourceToQueue(rc, nlm, childQueue, cluster));
    }
 }

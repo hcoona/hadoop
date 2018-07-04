@@ -26,6 +26,7 @@ import org.apache.hadoop.yarn.proto.YarnProtos.ContainerResourceDecreaseProto;
 import org.apache.hadoop.yarn.proto.YarnProtos.ContainerResourceDecreaseProtoOrBuilder;
 import org.apache.hadoop.yarn.proto.YarnProtos.ResourceProto;
 
+@Deprecated
 public class ContainerResourceDecreasePBImpl extends ContainerResourceDecrease {
   ContainerResourceDecreaseProto proto = ContainerResourceDecreaseProto
       .getDefaultInstance();
@@ -106,7 +107,7 @@ public class ContainerResourceDecreasePBImpl extends ContainerResourceDecrease {
   }
 
   private ResourceProto convertToProtoFormat(Resource t) {
-    return ((ResourcePBImpl) t).getProto();
+    return ProtoUtils.convertToProtoFormat(t);
   }
 
   private void mergeLocalToProto() {

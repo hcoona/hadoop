@@ -20,35 +20,25 @@ package org.apache.hadoop.yarn.api;
 
 import java.io.IOException;
 
-import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceAudience.Public;
 import org.apache.hadoop.classification.InterfaceStability.Stable;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
 import org.apache.hadoop.io.retry.Idempotent;
-import org.apache.hadoop.yarn.api.protocolrecords.CancelDelegationTokenRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.CancelDelegationTokenResponse;
-import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationAttemptReportRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationAttemptReportResponse;
-import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationAttemptsRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationAttemptsResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.FailApplicationAttemptRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.FailApplicationAttemptResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationReportRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationReportResponse;
-import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationsRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationsResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetClusterMetricsRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetClusterMetricsResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetClusterNodeLabelsRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetClusterNodeLabelsResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetClusterNodesRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetClusterNodesResponse;
-import org.apache.hadoop.yarn.api.protocolrecords.GetContainerReportRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.GetContainerReportResponse;
-import org.apache.hadoop.yarn.api.protocolrecords.GetContainersRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.GetContainersResponse;
-import org.apache.hadoop.yarn.api.protocolrecords.GetDelegationTokenRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.GetDelegationTokenResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.GetLabelsToNodesRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.GetLabelsToNodesResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNewApplicationRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNewApplicationResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.GetNewReservationRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.GetNewReservationResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNodesToLabelsRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNodesToLabelsResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetQueueInfoRequest;
@@ -59,32 +49,31 @@ import org.apache.hadoop.yarn.api.protocolrecords.KillApplicationRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.KillApplicationResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.MoveApplicationAcrossQueuesRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.MoveApplicationAcrossQueuesResponse;
-import org.apache.hadoop.yarn.api.protocolrecords.RenewDelegationTokenRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.RenewDelegationTokenResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationDeleteRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationDeleteResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.ReservationListRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.ReservationListResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationSubmissionRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationSubmissionResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationUpdateRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationUpdateResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.UpdateApplicationPriorityRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.UpdateApplicationPriorityResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.UpdateApplicationTimeoutsRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.UpdateApplicationTimeoutsResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.SignalContainerRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.SignalContainerResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.SubmitApplicationRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.SubmitApplicationResponse;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
-import org.apache.hadoop.yarn.api.records.ApplicationAttemptReport;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
-import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.api.records.ApplicationSubmissionContext;
-import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
-import org.apache.hadoop.yarn.api.records.ContainerReport;
 import org.apache.hadoop.yarn.api.records.NodeReport;
 import org.apache.hadoop.yarn.api.records.ReservationId;
 import org.apache.hadoop.yarn.api.records.Resource;
-import org.apache.hadoop.yarn.api.records.ResourceRequest;
-import org.apache.hadoop.yarn.api.records.Token;
 import org.apache.hadoop.yarn.api.records.YarnClusterMetrics;
 import org.apache.hadoop.yarn.exceptions.ApplicationNotFoundException;
-import org.apache.hadoop.yarn.exceptions.InvalidResourceRequestException;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 
 /**
@@ -94,7 +83,7 @@ import org.apache.hadoop.yarn.exceptions.YarnException;
  */
 @Public
 @Stable
-public interface ApplicationClientProtocol {
+public interface ApplicationClientProtocol extends ApplicationBaseProtocol {
   /**
    * <p>The interface used by clients to obtain a new {@link ApplicationId} for 
    * submitting new applications.</p>
@@ -157,9 +146,6 @@ public interface ApplicationClientProtocol {
    * @return (empty) response on accepting the submission
    * @throws YarnException
    * @throws IOException
-   * @throws InvalidResourceRequestException
-   *           The exception is thrown when a {@link ResourceRequest} is out of
-   *           the range of the configured lower and upper resource boundaries.
    * @see #getNewApplication(GetNewApplicationRequest)
    */
   @Public
@@ -171,6 +157,32 @@ public interface ApplicationClientProtocol {
   
   /**
    * <p>The interface used by clients to request the 
+   * <code>ResourceManager</code> to fail an application attempt.</p>
+   *
+   * <p>The client, via {@link FailApplicationAttemptRequest} provides the
+   * {@link ApplicationAttemptId} of the attempt to be failed.</p>
+   *
+   * <p> In secure mode,the <code>ResourceManager</code> verifies access to the
+   * application, queue etc. before failing the attempt.</p>
+   *
+   * <p>Currently, the <code>ResourceManager</code> returns an empty response
+   * on success and throws an exception on rejecting the request.</p>
+   *
+   * @param request request to fail an attempt
+   * @return <code>ResourceManager</code> returns an empty response
+   *         on success and throws an exception on rejecting the request
+   * @throws YarnException
+   * @throws IOException
+   * @see #getQueueUserAcls(GetQueueUserAclsInfoRequest)
+   */
+  @Public
+  @Unstable
+  public FailApplicationAttemptResponse failApplicationAttempt(
+      FailApplicationAttemptRequest request)
+  throws YarnException, IOException;
+
+  /**
+   * <p>The interface used by clients to request the
    * <code>ResourceManager</code> to abort submitted application.</p>
    * 
    * <p>The client, via {@link KillApplicationRequest} provides the
@@ -197,44 +209,6 @@ public interface ApplicationClientProtocol {
   throws YarnException, IOException;
 
   /**
-   * <p>The interface used by clients to get a report of an Application from
-   * the <code>ResourceManager</code>.</p>
-   * 
-   * <p>The client, via {@link GetApplicationReportRequest} provides the
-   * {@link ApplicationId} of the application.</p>
-   *
-   * <p> In secure mode,the <code>ResourceManager</code> verifies access to the
-   * application, queue etc. before accepting the request.</p> 
-   * 
-   * <p>The <code>ResourceManager</code> responds with a 
-   * {@link GetApplicationReportResponse} which includes the 
-   * {@link ApplicationReport} for the application.</p>
-   * 
-   * <p>If the user does not have <code>VIEW_APP</code> access then the
-   * following fields in the report will be set to stubbed values:
-   * <ul>
-   *   <li>host - set to "N/A"</li>
-   *   <li>RPC port - set to -1</li>
-   *   <li>client token - set to "N/A"</li>
-   *   <li>diagnostics - set to "N/A"</li>
-   *   <li>tracking URL - set to "N/A"</li>
-   *   <li>original tracking URL - set to "N/A"</li>
-   *   <li>resource usage report - all values are -1</li>
-   * </ul></p>
-   *
-   * @param request request for an application report
-   * @return application report 
-   * @throws YarnException
-   * @throws IOException
-   */
-  @Public
-  @Stable
-  @Idempotent
-  public GetApplicationReportResponse getApplicationReport(
-      GetApplicationReportRequest request) 
-  throws YarnException, IOException;
-  
-  /**
    * <p>The interface used by clients to get metrics about the cluster from
    * the <code>ResourceManager</code>.</p>
    * 
@@ -254,35 +228,7 @@ public interface ApplicationClientProtocol {
   public GetClusterMetricsResponse getClusterMetrics(
       GetClusterMetricsRequest request) 
   throws YarnException, IOException;
-  
-  /**
-   * <p>The interface used by clients to get a report of Applications
-   * matching the filters defined by {@link GetApplicationsRequest}
-   * in the cluster from the <code>ResourceManager</code>.</p>
-   * 
-   * <p>The <code>ResourceManager</code> responds with a 
-   * {@link GetApplicationsResponse} which includes the
-   * {@link ApplicationReport} for the applications.</p>
-   * 
-   * <p>If the user does not have <code>VIEW_APP</code> access for an
-   * application then the corresponding report will be filtered as
-   * described in {@link #getApplicationReport(GetApplicationReportRequest)}.
-   * </p>
-   *
-   * @param request request for report on applications
-   * @return report on applications matching the given application types
-   *           defined in the request
-   * @throws YarnException
-   * @throws IOException
-   * @see GetApplicationsRequest
-   */
-  @Public
-  @Stable
-  @Idempotent
-  public GetApplicationsResponse getApplications(
-      GetApplicationsRequest request)
-  throws YarnException, IOException;
-  
+
   /**
    * <p>The interface used by clients to get a report of all nodes
    * in the cluster from the <code>ResourceManager</code>.</p>
@@ -344,56 +290,7 @@ public interface ApplicationClientProtocol {
   public GetQueueUserAclsInfoResponse getQueueUserAcls(
       GetQueueUserAclsInfoRequest request) 
   throws YarnException, IOException;
-  
-  /**
-   * <p>The interface used by clients to get delegation token, enabling the 
-   * containers to be able to talk to the service using those tokens.
-   * 
-   *  <p> The <code>ResourceManager</code> responds with the delegation
-   *  {@link Token} that can be used by the client to speak to this
-   *  service.
-   * @param request request to get a delegation token for the client.
-   * @return delegation token that can be used to talk to this service
-   * @throws YarnException
-   * @throws IOException
-   */
-  @Public
-  @Stable
-  @Idempotent
-  public GetDelegationTokenResponse getDelegationToken(
-      GetDelegationTokenRequest request) 
-  throws YarnException, IOException;
-  
-  /**
-   * Renew an existing delegation {@link Token}.
-   * 
-   * @param request the delegation token to be renewed.
-   * @return the new expiry time for the delegation token.
-   * @throws YarnException
-   * @throws IOException
-   */
-  @Private
-  @Unstable
-  @Idempotent
-  public RenewDelegationTokenResponse renewDelegationToken(
-      RenewDelegationTokenRequest request) throws YarnException,
-      IOException;
 
-  /**
-   * Cancel an existing delegation {@link Token}.
-   * 
-   * @param request the delegation token to be cancelled.
-   * @return an empty response.
-   * @throws YarnException
-   * @throws IOException
-   */
-  @Private
-  @Unstable
-  @Idempotent
-  public CancelDelegationTokenResponse cancelDelegationToken(
-      CancelDelegationTokenRequest request) throws YarnException,
-      IOException;
-  
   /**
    * Move an application to a new queue.
    * 
@@ -409,151 +306,26 @@ public interface ApplicationClientProtocol {
       MoveApplicationAcrossQueuesRequest request) throws YarnException, IOException;
 
   /**
-   * <p>
-   * The interface used by clients to get a report of an Application Attempt
-   * from the <code>ResourceManager</code> 
-   * </p>
-   * 
-   * <p>
-   * The client, via {@link GetApplicationAttemptReportRequest} provides the
-   * {@link ApplicationAttemptId} of the application attempt.
-   * </p>
-   * 
-   * <p>
-   * In secure mode,the <code>ResourceManager</code> verifies access to
-   * the method before accepting the request.
-   * </p>
-   * 
-   * <p>
-   * The <code>ResourceManager</code> responds with a
-   * {@link GetApplicationAttemptReportResponse} which includes the
-   * {@link ApplicationAttemptReport} for the application attempt.
-   * </p>
-   * 
-   * <p>
-   * If the user does not have <code>VIEW_APP</code> access then the following
-   * fields in the report will be set to stubbed values:
-   * <ul>
-   * <li>host</li>
-   * <li>RPC port</li>
-   * <li>client token</li>
-   * <li>diagnostics - set to "N/A"</li>
-   * <li>tracking URL</li>
-   * </ul>
-   * </p>
-   * 
-   * @param request
-   *          request for an application attempt report
-   * @return application attempt report
-   * @throws YarnException
-   * @throws IOException
+   * <p>The interface used by clients to obtain a new {@link ReservationId} for
+   * submitting new reservations.</p>
+   *
+   * <p>The <code>ResourceManager</code> responds with a new, unique,
+   * {@link ReservationId} which is used by the client to submit
+   * a new reservation.</p>
+   *
+   * @param request to get a new <code>ReservationId</code>
+   * @return response containing the new <code>ReservationId</code> to be used
+   * to submit a new reservation
+   * @throws YarnException if the reservation system is not enabled.
+   * @throws IOException on IO failures.
+   * @see #submitReservation(ReservationSubmissionRequest)
    */
   @Public
   @Unstable
   @Idempotent
-  public GetApplicationAttemptReportResponse getApplicationAttemptReport(
-      GetApplicationAttemptReportRequest request) throws YarnException,
-      IOException;
-
-  /**
-   * <p>
-   * The interface used by clients to get a report of all Application attempts
-   * in the cluster from the <code>ResourceManager</code>
-   * </p>
-   * 
-   * <p>
-   * The <code>ResourceManager</code> responds with a
-   * {@link GetApplicationAttemptsRequest} which includes the
-   * {@link ApplicationAttemptReport} for all the applications attempts of a
-   * specified application attempt.
-   * </p>
-   * 
-   * <p>
-   * If the user does not have <code>VIEW_APP</code> access for an application
-   * then the corresponding report will be filtered as described in
-   * {@link #getApplicationAttemptReport(GetApplicationAttemptReportRequest)}.
-   * </p>
-   * 
-   * @param request
-   *          request for reports on all application attempts of an application
-   * @return reports on all application attempts of an application
-   * @throws YarnException
-   * @throws IOException
-   */
-  @Public
-  @Unstable
-  @Idempotent
-  public GetApplicationAttemptsResponse getApplicationAttempts(
-      GetApplicationAttemptsRequest request) throws YarnException, IOException;
-
-  /**
-   * <p>
-   * The interface used by clients to get a report of an Container from the
-   * <code>ResourceManager</code>
-   * </p>
-   * 
-   * <p>
-   * The client, via {@link GetContainerReportRequest} provides the
-   * {@link ContainerId} of the container.
-   * </p>
-   * 
-   * <p>
-   * In secure mode,the <code>ResourceManager</code> verifies access to the
-   * method before accepting the request.
-   * </p>
-   * 
-   * <p>
-   * The <code>ResourceManager</code> responds with a
-   * {@link GetContainerReportResponse} which includes the
-   * {@link ContainerReport} for the container.
-   * </p>
-   * 
-   * @param request
-   *          request for a container report
-   * @return container report
-   * @throws YarnException
-   * @throws IOException
-   */
-  @Public
-  @Unstable
-  @Idempotent
-  public GetContainerReportResponse getContainerReport(
-      GetContainerReportRequest request) throws YarnException, IOException;
-
-  /**
-   * <p>
-   * The interface used by clients to get a report of Containers for an
-   * application attempt from the <code>ResourceManager</code>
-   * </p>
-   * 
-   * <p>
-   * The client, via {@link GetContainersRequest} provides the
-   * {@link ApplicationAttemptId} of the application attempt.
-   * </p>
-   * 
-   * <p>
-   * In secure mode,the <code>ResourceManager</code> verifies access to the
-   * method before accepting the request.
-   * </p>
-   * 
-   * <p>
-   * The <code>ResourceManager</code> responds with a
-   * {@link GetContainersResponse} which includes a list of
-   * {@link ContainerReport} for all the containers of a specific application
-   * attempt.
-   * </p>
-   * 
-   * @param request
-   *          request for a list of container reports of an application attempt.
-   * @return reports on all containers of an application attempt
-   * @throws YarnException
-   * @throws IOException
-   */
-  @Public
-  @Unstable
-  @Idempotent
-  public GetContainersResponse getContainers(GetContainersRequest request)
-      throws YarnException, IOException;
+  GetNewReservationResponse getNewReservation(
+          GetNewReservationRequest request)
+          throws YarnException, IOException;
 
   /**
    * <p>
@@ -603,6 +375,7 @@ public interface ApplicationClientProtocol {
    */
   @Public
   @Unstable
+  @Idempotent
   public ReservationSubmissionResponse submitReservation(
       ReservationSubmissionRequest request) throws YarnException, IOException;
 
@@ -654,12 +427,57 @@ public interface ApplicationClientProtocol {
    * @throws YarnException if the request is invalid or reservation cannot be
    *           deleted successfully
    * @throws IOException
-   * 
+   *
    */
   @Public
   @Unstable
   public ReservationDeleteResponse deleteReservation(
       ReservationDeleteRequest request) throws YarnException, IOException;
+
+  /**
+   * <p>
+   * The interface used by clients to get the list of reservations in a plan.
+   * The reservationId will be used to search for reservations to list if it is
+   * provided. Otherwise, it will select active reservations within the
+   * startTime and endTime (inclusive).
+   * </p>
+   *
+   * @param request to list reservations in a plan. Contains fields to select
+   *                String queue, ReservationId reservationId, long startTime,
+   *                long endTime, and a bool includeReservationAllocations.
+   *
+   *                queue: Required. Cannot be null or empty. Refers to the
+   *                reservable queue in the scheduler that was selected when
+   *                creating a reservation submission
+   *                {@link ReservationSubmissionRequest}.
+   *
+   *                reservationId: Optional. If provided, other fields will
+   *                be ignored.
+   *
+   *                startTime: Optional. If provided, only reservations that
+   *                end after the startTime will be selected. This defaults
+   *                to 0 if an invalid number is used.
+   *
+   *                endTime: Optional. If provided, only reservations that
+   *                start on or before endTime will be selected. This defaults
+   *                to Long.MAX_VALUE if an invalid number is used.
+   *
+   *                includeReservationAllocations: Optional. Flag that
+   *                determines whether the entire reservation allocations are
+   *                to be returned. Reservation allocations are subject to
+   *                change in the event of re-planning as described by
+   *                {@code ReservationDefinition}.
+   *
+   * @return response that contains information about reservations that are
+   *                being searched for.
+   * @throws YarnException if the request is invalid
+   * @throws IOException on IO failures
+   *
+   */
+  @Public
+  @Unstable
+  ReservationListResponse listReservations(
+            ReservationListRequest request) throws YarnException, IOException;
 
   /**
    * <p>
@@ -678,6 +496,22 @@ public interface ApplicationClientProtocol {
 
   /**
    * <p>
+   * The interface used by client to get labels to nodes mappings
+   * in existing cluster
+   * </p>
+   *
+   * @param request
+   * @return labels to nodes mappings
+   * @throws YarnException
+   * @throws IOException
+   */
+  @Public
+  @Unstable
+  public GetLabelsToNodesResponse getLabelsToNodes(
+      GetLabelsToNodesRequest request) throws YarnException, IOException;
+
+  /**
+   * <p>
    * The interface used by client to get node labels in the cluster
    * </p>
    *
@@ -690,4 +524,69 @@ public interface ApplicationClientProtocol {
   @Unstable
   public GetClusterNodeLabelsResponse getClusterNodeLabels(
       GetClusterNodeLabelsRequest request) throws YarnException, IOException;
+
+  /**
+   * <p>
+   * The interface used by client to set priority of an application.
+   * </p>
+   * @param request to set priority of an application
+   * @return an empty response
+   * @throws YarnException
+   * @throws IOException
+   */
+  @Public
+  @Unstable
+  @Idempotent
+  public UpdateApplicationPriorityResponse updateApplicationPriority(
+      UpdateApplicationPriorityRequest request) throws YarnException,
+      IOException;
+
+  /**
+   * <p>The interface used by clients to request the
+   * <code>ResourceManager</code> to signal a container. For example,
+   * the client can send command OUTPUT_THREAD_DUMP to dump threads of the
+   * container.</p>
+   *
+   * <p>The client, via {@link SignalContainerRequest} provides the
+   * id of the container and the signal command. </p>
+   *
+   * <p> In secure mode,the <code>ResourceManager</code> verifies access to the
+   * application before signaling the container.
+   * The user needs to have <code>MODIFY_APP</code> permission.</p>
+   *
+   * <p>Currently, the <code>ResourceManager</code> returns an empty response
+   * on success and throws an exception on rejecting the request.</p>
+   *
+   * @param request request to signal a container
+   * @return <code>ResourceManager</code> returns an empty response
+   *         on success and throws an exception on rejecting the request
+   * @throws YarnException
+   * @throws IOException
+   */
+  @Public
+  @Unstable
+  SignalContainerResponse signalToContainer(
+      SignalContainerRequest request) throws YarnException,
+      IOException;
+
+  /**
+   * <p>
+   * The interface used by client to set ApplicationTimeouts of an application.
+   * The UpdateApplicationTimeoutsRequest should have timeout value with
+   * absolute time with ISO8601 format <b>yyyy-MM-dd'T'HH:mm:ss.SSSZ</b>.
+   * </p>
+   * <b>Note:</b> If application timeout value is less than or equal to current
+   * time then update application throws YarnException.
+   * @param request to set ApplicationTimeouts of an application
+   * @return a response with updated timeouts.
+   * @throws YarnException if update request has empty values or application is
+   *           in completing states.
+   * @throws IOException on IO failures
+   */
+  @Public
+  @Unstable
+  @Idempotent
+  public UpdateApplicationTimeoutsResponse updateApplicationTimeouts(
+      UpdateApplicationTimeoutsRequest request)
+      throws YarnException, IOException;
 }

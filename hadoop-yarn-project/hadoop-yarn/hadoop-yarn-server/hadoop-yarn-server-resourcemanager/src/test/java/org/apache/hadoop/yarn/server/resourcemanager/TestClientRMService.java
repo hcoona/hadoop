@@ -22,15 +22,18 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyBoolean;
+import static org.mockito.Matchers.anyListOf;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -47,14 +50,10 @@ import java.util.concurrent.CyclicBarrier;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.io.Text;
 import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.hadoop.security.authentication.util.KerberosName;
-import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.yarn.MockApps;
 import org.apache.hadoop.yarn.api.ApplicationClientProtocol;
 import org.apache.hadoop.yarn.api.protocolrecords.ApplicationsRequestScope;
-import org.apache.hadoop.yarn.api.protocolrecords.CancelDelegationTokenRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationAttemptReportRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationAttemptReportResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationAttemptsRequest;
@@ -70,6 +69,9 @@ import org.apache.hadoop.yarn.api.protocolrecords.GetContainerReportRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetContainerReportResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetContainersRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetContainersResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.GetLabelsToNodesRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.GetLabelsToNodesResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.GetNewReservationRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNodesToLabelsRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNodesToLabelsResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetQueueInfoRequest;
@@ -77,14 +79,17 @@ import org.apache.hadoop.yarn.api.protocolrecords.GetQueueInfoResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.KillApplicationRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.KillApplicationResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.MoveApplicationAcrossQueuesRequest;
-import org.apache.hadoop.yarn.api.protocolrecords.RenewDelegationTokenRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationDeleteRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationDeleteResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.ReservationListRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.ReservationListResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationSubmissionRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationSubmissionResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationUpdateRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationUpdateResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.SubmitApplicationRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.UpdateApplicationPriorityRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.UpdateApplicationPriorityResponse;
 import org.apache.hadoop.yarn.api.records.ApplicationAccessType;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
@@ -97,14 +102,16 @@ import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
 import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
 import org.apache.hadoop.yarn.api.records.NodeId;
+import org.apache.hadoop.yarn.api.records.NodeLabel;
 import org.apache.hadoop.yarn.api.records.NodeReport;
 import org.apache.hadoop.yarn.api.records.NodeState;
+import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.QueueACL;
+import org.apache.hadoop.yarn.api.records.QueueConfigurations;
 import org.apache.hadoop.yarn.api.records.QueueInfo;
 import org.apache.hadoop.yarn.api.records.ReservationDefinition;
 import org.apache.hadoop.yarn.api.records.ReservationId;
 import org.apache.hadoop.yarn.api.records.ReservationRequest;
-import org.apache.hadoop.yarn.api.records.ReservationRequestInterpreter;
 import org.apache.hadoop.yarn.api.records.ReservationRequests;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceRequest;
@@ -118,16 +125,15 @@ import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.factories.RecordFactory;
 import org.apache.hadoop.yarn.factory.providers.RecordFactoryProvider;
 import org.apache.hadoop.yarn.ipc.YarnRPC;
-import org.apache.hadoop.yarn.security.client.RMDelegationTokenIdentifier;
 import org.apache.hadoop.yarn.server.resourcemanager.ahs.RMApplicationHistoryWriter;
 import org.apache.hadoop.yarn.server.resourcemanager.metrics.SystemMetricsPublisher;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
-import org.apache.hadoop.yarn.server.resourcemanager.recovery.NullRMStateStore;
 import org.apache.hadoop.yarn.server.resourcemanager.recovery.RMStateStore;
 import org.apache.hadoop.yarn.server.resourcemanager.reservation.ReservationSystemTestUtil;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppEvent;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppImpl;
+import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppState;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttempt;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttemptImpl;
 import org.apache.hadoop.yarn.server.resourcemanager.rmcontainer.RMContainer;
@@ -137,21 +143,24 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerAppRepor
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.YarnScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.security.QueueACLsManager;
-import org.apache.hadoop.yarn.server.resourcemanager.security.RMDelegationTokenSecretManager;
+
+import org.apache.hadoop.yarn.server.scheduler.SchedulerRequestKey;
+import org.apache.hadoop.yarn.server.resourcemanager.timelineservice.RMTimelineCollectorManager;
 import org.apache.hadoop.yarn.server.security.ApplicationACLsManager;
 import org.apache.hadoop.yarn.server.utils.BuilderUtils;
 import org.apache.hadoop.yarn.util.Clock;
-import org.apache.hadoop.yarn.util.Records;
 import org.apache.hadoop.yarn.util.UTCClock;
+import org.apache.hadoop.yarn.util.resource.ResourceCalculator;
 import org.apache.hadoop.yarn.util.resource.Resources;
-import org.junit.AfterClass;
 import org.junit.Assert;
-import org.junit.BeforeClass;
+import org.junit.Assume;
 import org.junit.Test;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
+import org.mockito.Matchers;
 
 public class TestClientRMService {
 
@@ -161,31 +170,10 @@ public class TestClientRMService {
       .getRecordFactory(null);
 
   private String appType = "MockApp";
-
-  private static RMDelegationTokenSecretManager dtsm;
   
   private final static String QUEUE_1 = "Q-1";
   private final static String QUEUE_2 = "Q-2";
-  private final static String kerberosRule = "RULE:[1:$1@$0](.*@EXAMPLE.COM)s/@.*//\nDEFAULT";
-  static {
-    KerberosName.setRules(kerberosRule);
-  }
-  
-  @BeforeClass
-  public static void setupSecretManager() throws IOException {
-    RMContext rmContext = mock(RMContext.class);
-    when(rmContext.getStateStore()).thenReturn(new NullRMStateStore());
-    dtsm = new RMDelegationTokenSecretManager(60000, 60000, 60000, 60000, rmContext);
-    dtsm.startThreads();  
-  }
 
-  @AfterClass
-  public static void teardownSecretManager() {
-    if (dtsm != null) {
-      dtsm.stopThreads();
-    }
-  }
-  
   @Test
   public void testGetClusterNodes() throws Exception {
     MockRM rm = new MockRM() {
@@ -197,7 +185,7 @@ public class TestClientRMService {
     };
     rm.start();
     RMNodeLabelsManager labelsMgr = rm.getRMContext().getNodeLabelManager();
-    labelsMgr.addToCluserNodeLabels(ImmutableSet.of("x", "y"));
+    labelsMgr.addToCluserNodeLabelsWithDefaultExclusivity(ImmutableSet.of("x", "y"));
 
     // Add a healthy node with label = x
     MockNM node = rm.registerNode("host1:1234", 1024);
@@ -211,7 +199,7 @@ public class TestClientRMService {
     MockNM lostNode = rm.registerNode("host2:1235", 1024);
     rm.sendNodeStarted(lostNode);
     lostNode.nodeHeartbeat(true);
-    rm.NMwaitForState(lostNode.getNodeId(), NodeState.RUNNING);
+    rm.waitForState(lostNode.getNodeId(), NodeState.RUNNING);
     rm.sendNodeLost(lostNode);
 
     // Create a client.
@@ -237,6 +225,7 @@ public class TestClientRMService {
 
     // Now make the node unhealthy.
     node.nodeHeartbeat(false);
+    rm.waitForState(node.getNodeId(), NodeState.UNHEALTHY);
 
     // Call again
     nodeReports = client.getClusterNodes(request).getNodeReports();
@@ -273,7 +262,7 @@ public class TestClientRMService {
       Assert.assertTrue(report.getNodeLabels() != null
           && report.getNodeLabels().isEmpty());
     }
-    
+
     rpc.stopProxy(client, conf);
     rm.close();
   }
@@ -295,7 +284,8 @@ public class TestClientRMService {
     } catch (ApplicationNotFoundException ex) {
       Assert.assertEquals(ex.getMessage(),
           "Application with id '" + request.getApplicationId()
-              + "' doesn't exist in RM.");
+              + "' doesn't exist in RM. Please check that the "
+              + "job submission was successful.");
     }
   }
 
@@ -326,6 +316,45 @@ public class TestClientRMService {
           report.getApplicationResourceUsageReport();
       Assert.assertEquals(10, usageReport.getMemorySeconds());
       Assert.assertEquals(3, usageReport.getVcoreSeconds());
+      Assert.assertEquals("<Not set>", report.getAmNodeLabelExpression());
+      Assert.assertEquals("<Not set>", report.getAppNodeLabelExpression());
+
+      // if application has am node label set to blank
+      ApplicationId appId2 = getApplicationId(2);
+      when(mockAclsManager.checkAccess(UserGroupInformation.getCurrentUser(),
+          ApplicationAccessType.VIEW_APP, null, appId2)).thenReturn(true);
+      request.setApplicationId(appId2);
+      response = rmService.getApplicationReport(request);
+      report = response.getApplicationReport();
+
+      Assert.assertEquals(NodeLabel.DEFAULT_NODE_LABEL_PARTITION,
+          report.getAmNodeLabelExpression());
+      Assert.assertEquals(NodeLabel.NODE_LABEL_EXPRESSION_NOT_SET,
+          report.getAppNodeLabelExpression());
+
+      // if application has am node label set to blank
+      ApplicationId appId3 = getApplicationId(3);
+      when(mockAclsManager.checkAccess(UserGroupInformation.getCurrentUser(),
+          ApplicationAccessType.VIEW_APP, null, appId3)).thenReturn(true);
+
+      request.setApplicationId(appId3);
+      response = rmService.getApplicationReport(request);
+      report = response.getApplicationReport();
+
+      Assert.assertEquals("high-mem", report.getAmNodeLabelExpression());
+      Assert.assertEquals("high-mem", report.getAppNodeLabelExpression());
+
+      // if application id is null
+      GetApplicationReportRequest invalidRequest = recordFactory
+          .newRecordInstance(GetApplicationReportRequest.class);
+      invalidRequest.setApplicationId(null);
+      try {
+        rmService.getApplicationReport(invalidRequest);
+      } catch (YarnException e) {
+        // rmService should return a ApplicationNotFoundException
+        // when a null application id is provided
+        Assert.assertTrue(e instanceof ApplicationNotFoundException);
+      }
     } finally {
       rmService.close();
     }
@@ -368,7 +397,7 @@ public class TestClientRMService {
         mock(ApplicationSubmissionContext.class);
     YarnConfiguration config = new YarnConfiguration();
     RMAppAttemptImpl rmAppAttemptImpl = new RMAppAttemptImpl(attemptId,
-        rmContext, yarnScheduler, null, asContext, config, false, null);
+        rmContext, yarnScheduler, null, asContext, config, null, null);
     ApplicationResourceUsageReport report = rmAppAttemptImpl
         .getApplicationResourceUsageReport();
     assertEquals(report, RMServerUtils.DUMMY_APPLICATION_RESOURCE_USAGE_REPORT);
@@ -436,13 +465,14 @@ public class TestClientRMService {
     }
   }
 
-  public ClientRMService createRMService() throws IOException {
+  public ClientRMService createRMService() throws IOException, YarnException {
     YarnScheduler yarnScheduler = mockYarnScheduler();
     RMContext rmContext = mock(RMContext.class);
     mockRMContext(yarnScheduler, rmContext);
     ConcurrentHashMap<ApplicationId, RMApp> apps = getRMApps(rmContext,
         yarnScheduler);
     when(rmContext.getRMApps()).thenReturn(apps);
+    when(rmContext.getYarnConfiguration()).thenReturn(new Configuration());
     RMAppManager appManager = new RMAppManager(rmContext, yarnScheduler, null,
         mock(ApplicationACLsManager.class), new Configuration());
     when(rmContext.getDispatcher().getEventHandler()).thenReturn(
@@ -455,7 +485,8 @@ public class TestClientRMService {
     QueueACLsManager mockQueueACLsManager = mock(QueueACLsManager.class);
     when(
         mockQueueACLsManager.checkAccess(any(UserGroupInformation.class),
-            any(QueueACL.class), anyString())).thenReturn(true);
+            any(QueueACL.class), any(RMApp.class), any(String.class),
+            Matchers.<List<String>>any())).thenReturn(true);
     return new ClientRMService(rmContext, yarnScheduler, appManager,
         mockAclsManager, mockQueueACLsManager, null);
   }
@@ -484,7 +515,8 @@ public class TestClientRMService {
   @Test
   public void testForceKillApplication() throws Exception {
     YarnConfiguration conf = new YarnConfiguration();
-    MockRM rm = new MockRM();
+    conf.setBoolean(MockRM.ENABLE_WEBAPP, true);
+    MockRM rm = new MockRM(conf);
     rm.init(conf);
     rm.start();
 
@@ -500,6 +532,8 @@ public class TestClientRMService {
 
     KillApplicationRequest killRequest1 =
         KillApplicationRequest.newInstance(app1.getApplicationId());
+    String diagnostic = "message1";
+    killRequest1.setDiagnostics(diagnostic);
     KillApplicationRequest killRequest2 =
         KillApplicationRequest.newInstance(app2.getApplicationId());
 
@@ -517,6 +551,8 @@ public class TestClientRMService {
         killAttemptCount > 1);
     assertEquals("Incorrect number of apps in the RM", 1,
         rmService.getApplications(getRequest).getApplicationList().size());
+    assertTrue("Diagnostic message is incorrect",
+        app1.getDiagnostics().toString().contains(diagnostic));
 
     KillApplicationResponse killResponse2 =
         rmService.forceKillApplication(killRequest2);
@@ -552,8 +588,19 @@ public class TestClientRMService {
     YarnScheduler yarnScheduler = mock(YarnScheduler.class);
     RMContext rmContext = mock(RMContext.class);
     mockRMContext(yarnScheduler, rmContext);
+
+    ApplicationACLsManager mockAclsManager = mock(ApplicationACLsManager.class);
+    QueueACLsManager mockQueueACLsManager = mock(QueueACLsManager.class);
+    when(mockQueueACLsManager.checkAccess(any(UserGroupInformation.class),
+        any(QueueACL.class), any(RMApp.class), any(String.class),
+        Matchers.<List<String>>any()))
+        .thenReturn(true);
+    when(mockAclsManager.checkAccess(any(UserGroupInformation.class),
+        any(ApplicationAccessType.class), anyString(),
+        any(ApplicationId.class))).thenReturn(true);
+
     ClientRMService rmService = new ClientRMService(rmContext, yarnScheduler,
-        null, null, null, null);
+        null, mockAclsManager, mockQueueACLsManager, null);
     GetQueueInfoRequest request = recordFactory
         .newRecordInstance(GetQueueInfoRequest.class);
     request.setQueueName("testqueue");
@@ -562,235 +609,46 @@ public class TestClientRMService {
     List<ApplicationReport> applications = queueInfo.getQueueInfo()
         .getApplications();
     Assert.assertEquals(2, applications.size());
+    Map<String, QueueConfigurations> queueConfigsByPartition =
+        queueInfo.getQueueInfo().getQueueConfigurations();
+    Assert.assertEquals(1, queueConfigsByPartition.size());
+    Assert.assertTrue(queueConfigsByPartition.containsKey("*"));
+    QueueConfigurations queueConfigs = queueConfigsByPartition.get("*");
+    Assert.assertEquals(0.5f, queueConfigs.getCapacity(), 0.0001f);
+    Assert.assertEquals(0.1f, queueConfigs.getAbsoluteCapacity(), 0.0001f);
+    Assert.assertEquals(1.0f, queueConfigs.getMaxCapacity(), 0.0001f);
+    Assert.assertEquals(1.0f, queueConfigs.getAbsoluteMaxCapacity(), 0.0001f);
+    Assert.assertEquals(0.2f, queueConfigs.getMaxAMPercentage(), 0.0001f);
+
     request.setQueueName("nonexistentqueue");
     request.setIncludeApplications(true);
     // should not throw exception on nonexistent queue
     queueInfo = rmService.getQueueInfo(request);
+
+    // Case where user does not have application access
+    ApplicationACLsManager mockAclsManager1 =
+        mock(ApplicationACLsManager.class);
+    QueueACLsManager mockQueueACLsManager1 =
+        mock(QueueACLsManager.class);
+    when(mockQueueACLsManager1.checkAccess(any(UserGroupInformation.class),
+        any(QueueACL.class), any(RMApp.class), any(String.class),
+        Matchers.<List<String>>any()))
+        .thenReturn(false);
+    when(mockAclsManager1.checkAccess(any(UserGroupInformation.class),
+        any(ApplicationAccessType.class), anyString(),
+        any(ApplicationId.class))).thenReturn(false);
+
+    ClientRMService rmService1 = new ClientRMService(rmContext, yarnScheduler,
+        null, mockAclsManager1, mockQueueACLsManager1, null);
+    request.setQueueName("testqueue");
+    request.setIncludeApplications(true);
+    GetQueueInfoResponse queueInfo1 = rmService1.getQueueInfo(request);
+    List<ApplicationReport> applications1 = queueInfo1.getQueueInfo()
+        .getApplications();
+    Assert.assertEquals(0, applications1.size());
   }
 
-  private static final UserGroupInformation owner =
-      UserGroupInformation.createRemoteUser("owner");
-  private static final UserGroupInformation other =
-      UserGroupInformation.createRemoteUser("other");
-  private static final UserGroupInformation tester =
-      UserGroupInformation.createRemoteUser("tester");
-  private static final String testerPrincipal = "tester@EXAMPLE.COM";
-  private static final String ownerPrincipal = "owner@EXAMPLE.COM";
-  private static final String otherPrincipal = "other@EXAMPLE.COM";
-  private static final UserGroupInformation testerKerb =
-      UserGroupInformation.createRemoteUser(testerPrincipal);
-  private static final UserGroupInformation ownerKerb =
-      UserGroupInformation.createRemoteUser(ownerPrincipal);
-  private static final UserGroupInformation otherKerb =
-      UserGroupInformation.createRemoteUser(otherPrincipal);
   
-  @Test
-  public void testTokenRenewalByOwner() throws Exception {
-    owner.doAs(new PrivilegedExceptionAction<Void>() {
-      @Override
-      public Void run() throws Exception {
-        checkTokenRenewal(owner, owner);
-        return null;
-      }
-    });
-  }
-  
-  @Test
-  public void testTokenRenewalWrongUser() throws Exception {
-    try {
-      owner.doAs(new PrivilegedExceptionAction<Void>() {
-        @Override
-        public Void run() throws Exception {
-          try {
-            checkTokenRenewal(owner, other);
-            return null;
-          } catch (YarnException ex) {
-            Assert.assertTrue(ex.getMessage().contains(owner.getUserName() +
-                " tries to renew a token with renewer " +
-                other.getUserName()));
-            throw ex;
-          }
-        }
-      });
-    } catch (Exception e) {
-      return;
-    }
-    Assert.fail("renew should have failed");
-  }
-
-  @Test
-  public void testTokenRenewalByLoginUser() throws Exception {
-    UserGroupInformation.getLoginUser().doAs(new PrivilegedExceptionAction<Void>() {
-      @Override
-      public Void run() throws Exception {
-        checkTokenRenewal(owner, owner);
-        checkTokenRenewal(owner, other);
-        return null;
-      }
-    });
-  }
-
-  private void checkTokenRenewal(UserGroupInformation owner,
-      UserGroupInformation renewer) throws IOException, YarnException {
-    RMDelegationTokenIdentifier tokenIdentifier =
-        new RMDelegationTokenIdentifier(
-            new Text(owner.getUserName()), new Text(renewer.getUserName()), null);
-    Token<?> token =
-        new Token<RMDelegationTokenIdentifier>(tokenIdentifier, dtsm);
-    org.apache.hadoop.yarn.api.records.Token dToken = BuilderUtils.newDelegationToken(
-        token.getIdentifier(), token.getKind().toString(),
-        token.getPassword(), token.getService().toString());
-    RenewDelegationTokenRequest request =
-        Records.newRecord(RenewDelegationTokenRequest.class);
-    request.setDelegationToken(dToken);
-
-    RMContext rmContext = mock(RMContext.class);
-    ClientRMService rmService = new ClientRMService(
-        rmContext, null, null, null, null, dtsm);
-    rmService.renewDelegationToken(request);
-  }
-
-  @Test
-  public void testTokenCancellationByOwner() throws Exception {
-    // two tests required - one with a kerberos name
-    // and with a short name
-    RMContext rmContext = mock(RMContext.class);
-    final ClientRMService rmService =
-        new ClientRMService(rmContext, null, null, null, null, dtsm);
-    testerKerb.doAs(new PrivilegedExceptionAction<Void>() {
-      @Override
-      public Void run() throws Exception {
-        checkTokenCancellation(rmService, testerKerb, other);
-        return null;
-      }
-    });
-    owner.doAs(new PrivilegedExceptionAction<Void>() {
-      @Override
-      public Void run() throws Exception {
-        checkTokenCancellation(owner, other);
-        return null;
-      }
-    });
-  }
-
-  @Test
-  public void testTokenCancellationByRenewer() throws Exception {
-    // two tests required - one with a kerberos name
-    // and with a short name
-    RMContext rmContext = mock(RMContext.class);
-    final ClientRMService rmService =
-        new ClientRMService(rmContext, null, null, null, null, dtsm);
-    testerKerb.doAs(new PrivilegedExceptionAction<Void>() {
-      @Override
-      public Void run() throws Exception {
-        checkTokenCancellation(rmService, owner, testerKerb);
-        return null;
-      }
-    });
-    other.doAs(new PrivilegedExceptionAction<Void>() {
-      @Override
-      public Void run() throws Exception {
-        checkTokenCancellation(owner, other);
-        return null;
-      }
-    });
-  }
-
-  @Test
-  public void testTokenCancellationByWrongUser() {
-    // two sets to test -
-    // 1. try to cancel tokens of short and kerberos users as a kerberos UGI
-    // 2. try to cancel tokens of short and kerberos users as a simple auth UGI
-
-    RMContext rmContext = mock(RMContext.class);
-    final ClientRMService rmService =
-        new ClientRMService(rmContext, null, null, null, null, dtsm);
-    UserGroupInformation[] kerbTestOwners =
-        { owner, other, tester, ownerKerb, otherKerb };
-    UserGroupInformation[] kerbTestRenewers =
-        { owner, other, ownerKerb, otherKerb };
-    for (final UserGroupInformation tokOwner : kerbTestOwners) {
-      for (final UserGroupInformation tokRenewer : kerbTestRenewers) {
-        try {
-          testerKerb.doAs(new PrivilegedExceptionAction<Void>() {
-            @Override
-            public Void run() throws Exception {
-              try {
-                checkTokenCancellation(rmService, tokOwner, tokRenewer);
-                Assert.fail("We should not reach here; token owner = "
-                    + tokOwner.getUserName() + ", renewer = "
-                    + tokRenewer.getUserName());
-                return null;
-              } catch (YarnException e) {
-                Assert.assertTrue(e.getMessage().contains(
-                  testerKerb.getUserName()
-                      + " is not authorized to cancel the token"));
-                return null;
-              }
-            }
-          });
-        } catch (Exception e) {
-          Assert.fail("Unexpected exception; " + e.getMessage());
-        }
-      }
-    }
-
-    UserGroupInformation[] simpleTestOwners =
-        { owner, other, ownerKerb, otherKerb, testerKerb };
-    UserGroupInformation[] simpleTestRenewers =
-        { owner, other, ownerKerb, otherKerb };
-    for (final UserGroupInformation tokOwner : simpleTestOwners) {
-      for (final UserGroupInformation tokRenewer : simpleTestRenewers) {
-        try {
-          tester.doAs(new PrivilegedExceptionAction<Void>() {
-            @Override
-            public Void run() throws Exception {
-              try {
-                checkTokenCancellation(tokOwner, tokRenewer);
-                Assert.fail("We should not reach here; token owner = "
-                    + tokOwner.getUserName() + ", renewer = "
-                    + tokRenewer.getUserName());
-                return null;
-              } catch (YarnException ex) {
-                Assert.assertTrue(ex.getMessage().contains(
-                  tester.getUserName()
-                      + " is not authorized to cancel the token"));
-                return null;
-              }
-            }
-          });
-        } catch (Exception e) {
-          Assert.fail("Unexpected exception; " + e.getMessage());
-        }
-      }
-    }
-  }
-
-  private void checkTokenCancellation(UserGroupInformation owner,
-      UserGroupInformation renewer) throws IOException, YarnException {
-    RMContext rmContext = mock(RMContext.class);
-    final ClientRMService rmService =
-        new ClientRMService(rmContext, null, null, null, null, dtsm);
-    checkTokenCancellation(rmService, owner, renewer);
-  }
-
-  private void checkTokenCancellation(ClientRMService rmService,
-      UserGroupInformation owner, UserGroupInformation renewer)
-      throws IOException, YarnException {
-    RMDelegationTokenIdentifier tokenIdentifier =
-        new RMDelegationTokenIdentifier(new Text(owner.getUserName()),
-          new Text(renewer.getUserName()), null);
-    Token<?> token =
-        new Token<RMDelegationTokenIdentifier>(tokenIdentifier, dtsm);
-    org.apache.hadoop.yarn.api.records.Token dToken =
-        BuilderUtils.newDelegationToken(token.getIdentifier(), token.getKind()
-          .toString(), token.getPassword(), token.getService().toString());
-    CancelDelegationTokenRequest request =
-        Records.newRecord(CancelDelegationTokenRequest.class);
-    request.setDelegationToken(dToken);
-    rmService.cancelDelegationToken(request);
-  }
-
   @Test (timeout = 30000)
   @SuppressWarnings ("rawtypes")
   public void testAppSubmit() throws Exception {
@@ -805,6 +663,9 @@ public class TestClientRMService {
         new EventHandler<Event>() {
           public void handle(Event event) {}
         });
+    doReturn(mock(RMTimelineCollectorManager.class)).when(rmContext)
+        .getRMTimelineCollectorManager();
+
     ApplicationId appId1 = getApplicationId(100);
 
     ApplicationACLsManager mockAclsManager = mock(ApplicationACLsManager.class);
@@ -814,10 +675,13 @@ public class TestClientRMService {
 
     QueueACLsManager mockQueueACLsManager = mock(QueueACLsManager.class);
     when(mockQueueACLsManager.checkAccess(any(UserGroupInformation.class),
-            any(QueueACL.class), anyString())).thenReturn(true);
+        any(QueueACL.class), any(RMApp.class), any(String.class),
+        Matchers.<List<String>>any()))
+        .thenReturn(true);
     ClientRMService rmService =
         new ClientRMService(rmContext, yarnScheduler, appManager,
             mockAclsManager, mockQueueACLsManager, null);
+    rmService.init(new Configuration());
 
     // without name and queue
 
@@ -878,6 +742,18 @@ public class TestClientRMService {
     Assert.assertEquals(appId2,
         getAllApplicationsResponse.getApplicationList()
             .get(0).getApplicationId());
+
+    // Test query with uppercase appType also works
+    appTypes = new HashSet<String>();
+    appTypes.add("MATCHTYPE");
+    getAllAppsRequest = GetApplicationsRequest.newInstance(appTypes);
+    getAllApplicationsResponse =
+        rmService.getApplications(getAllAppsRequest);
+    Assert.assertEquals(1,
+        getAllApplicationsResponse.getApplicationList().size());
+    Assert.assertEquals(appId2,
+        getAllApplicationsResponse.getApplicationList()
+            .get(0).getApplicationId());
   }
 
   @Test
@@ -892,6 +768,9 @@ public class TestClientRMService {
     mockRMContext(yarnScheduler, rmContext);
     RMStateStore stateStore = mock(RMStateStore.class);
     when(rmContext.getStateStore()).thenReturn(stateStore);
+    doReturn(mock(RMTimelineCollectorManager.class)).when(rmContext)
+    .getRMTimelineCollectorManager();
+
     RMAppManager appManager = new RMAppManager(rmContext, yarnScheduler,
         null, mock(ApplicationACLsManager.class), new Configuration());
     when(rmContext.getDispatcher().getEventHandler()).thenReturn(
@@ -902,10 +781,13 @@ public class TestClientRMService {
     ApplicationACLsManager mockAclsManager = mock(ApplicationACLsManager.class);
     QueueACLsManager mockQueueACLsManager = mock(QueueACLsManager.class);
     when(mockQueueACLsManager.checkAccess(any(UserGroupInformation.class),
-        any(QueueACL.class), anyString())).thenReturn(true);
+        any(QueueACL.class), any(RMApp.class), any(String.class),
+        Matchers.<List<String>>any()))
+        .thenReturn(true);
     ClientRMService rmService =
         new ClientRMService(rmContext, yarnScheduler, appManager,
             mockAclsManager, mockQueueACLsManager, null);
+    rmService.init(new Configuration());
 
     // Initialize appnames and queues
     String[] queues = {QUEUE_1, QUEUE_2};
@@ -965,7 +847,7 @@ public class TestClientRMService {
     assertEquals("Incorrect number of applications in queue", 2,
         rmService.getApplications(request).getApplicationList().size());
     assertEquals("Incorrect number of applications in queue", 2,
-        rmService.getApplications(request, false).getApplicationList().size());
+        rmService.getApplications(request).getApplicationList().size());
 
     queueSet.add(queues[1]);
     assertEquals("Incorrect number of applications in queue", 3,
@@ -983,6 +865,12 @@ public class TestClientRMService {
     userSet.add(UserGroupInformation.getCurrentUser().getShortUserName());
     assertEquals("Incorrect number of applications for user", 3,
         rmService.getApplications(request).getApplicationList().size());
+
+    rmService.setDisplayPerUserApps(true);
+    userSet.clear();
+    assertEquals("Incorrect number of applications for user", 6,
+        rmService.getApplications(request).getApplicationList().size());
+    rmService.setDisplayPerUserApps(false);
 
     // Check tags
     request = GetApplicationsRequest.newInstance(
@@ -1063,10 +951,13 @@ public class TestClientRMService {
     };
 
     when(rmContext.getDispatcher().getEventHandler()).thenReturn(eventHandler);
-      
+    doReturn(mock(RMTimelineCollectorManager.class)).when(rmContext)
+        .getRMTimelineCollectorManager();
+
     final ClientRMService rmService =
         new ClientRMService(rmContext, yarnScheduler, appManager, null, null,
             null);
+    rmService.init(new Configuration());
 
     // submit an app and wait for it to block while in app submission
     Thread t = new Thread() {
@@ -1074,7 +965,7 @@ public class TestClientRMService {
       public void run() {
         try {
           rmService.submitApplication(submitRequest1);
-        } catch (YarnException e) {}
+        } catch (YarnException | IOException e) {}
       }
     };
     t.start();
@@ -1115,6 +1006,7 @@ public class TestClientRMService {
     submissionContext.setApplicationType(appType);
     submissionContext.setApplicationTags(tags);
     submissionContext.setUnmanagedAM(unmanaged);
+    submissionContext.setPriority(Priority.newInstance(0));
 
     SubmitApplicationRequest submitRequest =
         recordFactory.newRecordInstance(SubmitApplicationRequest.class);
@@ -1128,8 +1020,21 @@ public class TestClientRMService {
     when(rmContext.getDispatcher()).thenReturn(dispatcher);
     EventHandler eventHandler = mock(EventHandler.class);
     when(dispatcher.getEventHandler()).thenReturn(eventHandler);
+
     QueueInfo queInfo = recordFactory.newRecordInstance(QueueInfo.class);
     queInfo.setQueueName("testqueue");
+    QueueConfigurations queueConfigs =
+        recordFactory.newRecordInstance(QueueConfigurations.class);
+    queueConfigs.setCapacity(0.5f);
+    queueConfigs.setAbsoluteCapacity(0.1f);
+    queueConfigs.setMaxCapacity(1.0f);
+    queueConfigs.setAbsoluteMaxCapacity(1.0f);
+    queueConfigs.setMaxAMPercentage(0.2f);
+    Map<String, QueueConfigurations> queueConfigsByPartition =
+        new HashMap<>();
+    queueConfigsByPartition.put("*", queueConfigs);
+    queInfo.setQueueConfigurations(queueConfigsByPartition);
+
     when(yarnScheduler.getQueueInfo(eq("testqueue"), anyBoolean(), anyBoolean()))
         .thenReturn(queInfo);
     when(yarnScheduler.getQueueInfo(eq("nonexistentqueue"), anyBoolean(), anyBoolean()))
@@ -1138,6 +1043,7 @@ public class TestClientRMService {
     when(rmContext.getRMApplicationHistoryWriter()).thenReturn(writer);
     SystemMetricsPublisher publisher = mock(SystemMetricsPublisher.class);
     when(rmContext.getSystemMetricsPublisher()).thenReturn(publisher);
+    when(rmContext.getYarnConfiguration()).thenReturn(new YarnConfiguration());
     ConcurrentHashMap<ApplicationId, RMApp> apps = getRMApps(rmContext,
         yarnScheduler);
     when(rmContext.getRMApps()).thenReturn(apps);
@@ -1156,11 +1062,11 @@ public class TestClientRMService {
     ApplicationId applicationId3 = getApplicationId(3);
     YarnConfiguration config = new YarnConfiguration();
     apps.put(applicationId1, getRMApp(rmContext, yarnScheduler, applicationId1,
-        config, "testqueue", 10, 3));
+        config, "testqueue", 10, 3,null,null));
     apps.put(applicationId2, getRMApp(rmContext, yarnScheduler, applicationId2,
-        config, "a", 20, 2));
+        config, "a", 20, 2,null,""));
     apps.put(applicationId3, getRMApp(rmContext, yarnScheduler, applicationId3,
-        config, "testqueue", 40, 5));
+        config, "testqueue", 40, 5,"high-mem","high-mem"));
     return apps;
   }
   
@@ -1183,17 +1089,19 @@ public class TestClientRMService {
 
   private RMAppImpl getRMApp(RMContext rmContext, YarnScheduler yarnScheduler,
       ApplicationId applicationId3, YarnConfiguration config, String queueName,
-      final long memorySeconds, final long vcoreSeconds) {
+      final long memorySeconds, final long vcoreSeconds,
+      String appNodeLabelExpression, String amNodeLabelExpression) {
     ApplicationSubmissionContext asContext = mock(ApplicationSubmissionContext.class);
     when(asContext.getMaxAppAttempts()).thenReturn(1);
-
+    when(asContext.getNodeLabelExpression()).thenReturn(appNodeLabelExpression);
+    when(asContext.getPriority()).thenReturn(Priority.newInstance(0));
     RMAppImpl app =
         spy(new RMAppImpl(applicationId3, rmContext, config, null, null,
             queueName, asContext, yarnScheduler, null,
             System.currentTimeMillis(), "YARN", null,
-            BuilderUtils.newResourceRequest(
+            Collections.singletonList(BuilderUtils.newResourceRequest(
                 RMAppAttemptImpl.AM_CONTAINER_PRIORITY, ResourceRequest.ANY,
-                Resource.newInstance(1024, 1), 1)){
+                Resource.newInstance(1024, 1), 1))){
                   @Override
                   public ApplicationReport createAndGetApplicationReport(
                       String clientUserName, boolean allowAccess) {
@@ -1207,20 +1115,23 @@ public class TestClientRMService {
                     return report;
                   }
               });
-
+    app.getAMResourceRequests().get(0)
+        .setNodeLabelExpression(amNodeLabelExpression);
     ApplicationAttemptId attemptId = ApplicationAttemptId.newInstance(
         ApplicationId.newInstance(123456, 1), 1);
     RMAppAttemptImpl rmAppAttemptImpl = spy(new RMAppAttemptImpl(attemptId,
-        rmContext, yarnScheduler, null, asContext, config, false, null));
+        rmContext, yarnScheduler, null, asContext, config, null, app));
     Container container = Container.newInstance(
         ContainerId.newContainerId(attemptId, 1), null, "", null, null, null);
     RMContainerImpl containerimpl = spy(new RMContainerImpl(container,
-        attemptId, null, "", rmContext));
+        SchedulerRequestKey.extractFrom(container), attemptId, null, "",
+        rmContext));
     Map<ApplicationAttemptId, RMAppAttempt> attempts = 
       new HashMap<ApplicationAttemptId, RMAppAttempt>();
     attempts.put(attemptId, rmAppAttemptImpl);
     when(app.getCurrentAppAttempt()).thenReturn(rmAppAttemptImpl);
     when(app.getAppAttempts()).thenReturn(attempts);
+    when(app.getApplicationPriority()).thenReturn(Priority.newInstance(0));
     when(rmAppAttemptImpl.getMasterContainer()).thenReturn(container);
     ResourceScheduler rs = mock(ResourceScheduler.class);
     when(rmContext.getScheduler()).thenReturn(rs);
@@ -1236,14 +1147,14 @@ public class TestClientRMService {
         rmContext.getScheduler().getSchedulerAppInfo(attemptId)
             .getLiveContainers()).thenReturn(rmContainers);
     ContainerStatus cs = mock(ContainerStatus.class);
-    when(containerimpl.getFinishedStatus()).thenReturn(cs);
+    when(containerimpl.completed()).thenReturn(false);
     when(containerimpl.getDiagnosticsInfo()).thenReturn("N/A");
     when(containerimpl.getContainerExitStatus()).thenReturn(0);
     when(containerimpl.getContainerState()).thenReturn(ContainerState.COMPLETE);
     return app;
   }
 
-  private static YarnScheduler mockYarnScheduler() {
+  private static YarnScheduler mockYarnScheduler() throws YarnException {
     YarnScheduler yarnScheduler = mock(YarnScheduler.class);
     when(yarnScheduler.getMinimumResourceCapability()).thenReturn(
         Resources.createResource(
@@ -1257,12 +1168,17 @@ public class TestClientRMService {
         Arrays.asList(getApplicationAttemptId(103)));
     ApplicationAttemptId attemptId = getApplicationAttemptId(1);
     when(yarnScheduler.getAppResourceUsageReport(attemptId)).thenReturn(null);
+
+    ResourceCalculator rs = mock(ResourceCalculator.class);
+    when(yarnScheduler.getResourceCalculator()).thenReturn(rs);
+
+    when(yarnScheduler.checkAndGetApplicationPriority(any(Priority.class),
+        any(UserGroupInformation.class), anyString(), any(ApplicationId.class)))
+            .thenReturn(Priority.newInstance(0));
     return yarnScheduler;
   }
 
-  @Test
-  public void testReservationAPIs() {
-    // initialize
+  private ResourceManager setupResourceManager() {
     CapacitySchedulerConfiguration conf = new CapacitySchedulerConfiguration();
     ReservationSystemTestUtil.setupQueueConfiguration(conf);
     conf.setClass(YarnConfiguration.RM_SCHEDULER, CapacityScheduler.class,
@@ -1270,40 +1186,95 @@ public class TestClientRMService {
     conf.setBoolean(YarnConfiguration.RM_RESERVATION_SYSTEM_ENABLE, true);
     MockRM rm = new MockRM(conf);
     rm.start();
-    MockNM nm;
     try {
-      nm = rm.registerNode("127.0.0.1:1", 102400, 100);
+      rm.registerNode("127.0.0.1:1", 102400, 100);
       // allow plan follower to synchronize
       Thread.sleep(1050);
     } catch (Exception e) {
       Assert.fail(e.getMessage());
     }
+    return rm;
+  }
 
-    // Create a client.
-    ClientRMService clientService = rm.getClientRMService();
-
-    // create a reservation
-    Clock clock = new UTCClock();
-    long arrival = clock.getTime();
-    long duration = 60000;
-    long deadline = (long) (arrival + 1.05 * duration);
-    ReservationSubmissionRequest sRequest =
-        createSimpleReservationRequest(4, arrival, deadline, duration);
+  private ReservationSubmissionRequest submitReservationTestHelper(
+      ClientRMService clientService, long arrival, long deadline,
+      long duration) {
     ReservationSubmissionResponse sResponse = null;
+    GetNewReservationRequest newReservationRequest =
+        GetNewReservationRequest.newInstance();
+    ReservationId reservationID = null;
+    try {
+      reservationID = clientService.getNewReservation(newReservationRequest)
+          .getReservationId();
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+    ReservationSubmissionRequest sRequest =
+        ReservationSystemTestUtil.createSimpleReservationRequest(reservationID,
+            4, arrival, deadline, duration);
     try {
       sResponse = clientService.submitReservation(sRequest);
     } catch (Exception e) {
       Assert.fail(e.getMessage());
     }
     Assert.assertNotNull(sResponse);
-    ReservationId reservationID = sResponse.getReservationId();
     Assert.assertNotNull(reservationID);
-    LOG.info("Submit reservation response: " + reservationID);
+    System.out.println("Submit reservation response: " + reservationID);
+    return sRequest;
+  }
 
-    // Update the reservation
+  @Test
+  public void testCreateReservation() {
+    ResourceManager rm = setupResourceManager();
+    ClientRMService clientService = rm.getClientRMService();
+    Clock clock = new UTCClock();
+    long arrival = clock.getTime();
+    long duration = 60000;
+    long deadline = (long) (arrival + 1.05 * duration);
+    ReservationSubmissionRequest sRequest =
+        submitReservationTestHelper(clientService, arrival, deadline, duration);
+
+    // Submit the reservation again with the same request and make sure it
+    // passes.
+    try {
+      clientService.submitReservation(sRequest);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+
+    // Submit the reservation with the same reservation id but different
+    // reservation definition, and ensure YarnException is thrown.
+    arrival = clock.getTime();
+    ReservationDefinition rDef = sRequest.getReservationDefinition();
+    rDef.setArrival(arrival + duration);
+    sRequest.setReservationDefinition(rDef);
+    try {
+      clientService.submitReservation(sRequest);
+      Assert.fail("Reservation submission should fail if a duplicate "
+          + "reservation id is used, but the reservation definition has been "
+          + "updated.");
+    } catch (Exception e) {
+      Assert.assertTrue(e instanceof YarnException);
+    }
+
+    rm.stop();
+  }
+
+  @Test
+  public void testUpdateReservation() {
+    ResourceManager rm = setupResourceManager();
+    ClientRMService clientService = rm.getClientRMService();
+    Clock clock = new UTCClock();
+    long arrival = clock.getTime();
+    long duration = 60000;
+    long deadline = (long) (arrival + 1.05 * duration);
+    ReservationSubmissionRequest sRequest =
+        submitReservationTestHelper(clientService, arrival, deadline, duration);
+
     ReservationDefinition rDef = sRequest.getReservationDefinition();
     ReservationRequest rr =
         rDef.getReservationRequests().getReservationResources().get(0);
+    ReservationId reservationID = sRequest.getReservationId();
     rr.setNumContainers(5);
     arrival = clock.getTime();
     duration = 30000;
@@ -1319,9 +1290,240 @@ public class TestClientRMService {
     } catch (Exception e) {
       Assert.fail(e.getMessage());
     }
-    Assert.assertNotNull(sResponse);
-    LOG.info("Update reservation response: " + uResponse);
+    Assert.assertNotNull(uResponse);
+    System.out.println("Update reservation response: " + uResponse);
 
+    rm.stop();
+  }
+
+  @Test
+  public void testListReservationsByReservationId() {
+    ResourceManager rm = setupResourceManager();
+    ClientRMService clientService = rm.getClientRMService();
+    Clock clock = new UTCClock();
+    long arrival = clock.getTime();
+    long duration = 60000;
+    long deadline = (long) (arrival + 1.05 * duration);
+    ReservationSubmissionRequest sRequest =
+        submitReservationTestHelper(clientService, arrival, deadline, duration);
+
+    ReservationId reservationID = sRequest.getReservationId();
+    ReservationListResponse response = null;
+    ReservationListRequest request = ReservationListRequest.newInstance(
+        ReservationSystemTestUtil.reservationQ, reservationID.toString(), -1,
+        -1, false);
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+    Assert.assertNotNull(response);
+    Assert.assertEquals(1, response.getReservationAllocationState().size());
+    Assert.assertEquals(response.getReservationAllocationState().get(0)
+        .getReservationId().getId(), reservationID.getId());
+    Assert.assertEquals(response.getReservationAllocationState().get(0)
+        .getResourceAllocationRequests().size(), 0);
+
+    rm.stop();
+  }
+
+  @Test
+  public void testListReservationsByTimeInterval() {
+    ResourceManager rm = setupResourceManager();
+    ClientRMService clientService = rm.getClientRMService();
+    Clock clock = new UTCClock();
+    long arrival = clock.getTime();
+    long duration = 60000;
+    long deadline = (long) (arrival + 1.05 * duration);
+    ReservationSubmissionRequest sRequest =
+        submitReservationTestHelper(clientService, arrival, deadline, duration);
+
+    // List reservations, search by a point in time within the reservation
+    // range.
+    arrival = clock.getTime();
+    ReservationId reservationID = sRequest.getReservationId();
+    ReservationListRequest request = ReservationListRequest.newInstance(
+        ReservationSystemTestUtil.reservationQ, "", arrival + duration / 2,
+        arrival + duration / 2, true);
+
+    ReservationListResponse response = null;
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+    Assert.assertNotNull(response);
+    Assert.assertEquals(1, response.getReservationAllocationState().size());
+    Assert.assertEquals(response.getReservationAllocationState().get(0)
+        .getReservationId().getId(), reservationID.getId());
+    // List reservations, search by time within reservation interval.
+    request = ReservationListRequest.newInstance(
+        ReservationSystemTestUtil.reservationQ, "", 1, Long.MAX_VALUE, true);
+
+    response = null;
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+    Assert.assertNotNull(response);
+    Assert.assertEquals(1, response.getReservationAllocationState().size());
+    Assert.assertEquals(response.getReservationAllocationState().get(0)
+        .getReservationId().getId(), reservationID.getId());
+    // Verify that the full resource allocations exist.
+    Assert.assertTrue(response.getReservationAllocationState().get(0)
+        .getResourceAllocationRequests().size() > 0);
+
+    // Verify that the full RDL is returned.
+    ReservationRequests reservationRequests =
+        response.getReservationAllocationState().get(0)
+            .getReservationDefinition().getReservationRequests();
+    Assert.assertEquals("R_ALL",
+        reservationRequests.getInterpreter().toString());
+    Assert.assertTrue(reservationRequests.getReservationResources().get(0)
+        .getDuration() == duration);
+
+    rm.stop();
+  }
+
+  @Test
+  public void testListReservationsByInvalidTimeInterval() {
+    ResourceManager rm = setupResourceManager();
+    ClientRMService clientService = rm.getClientRMService();
+    Clock clock = new UTCClock();
+    long arrival = clock.getTime();
+    long duration = 60000;
+    long deadline = (long) (arrival + 1.05 * duration);
+    ReservationSubmissionRequest sRequest =
+        submitReservationTestHelper(clientService, arrival, deadline, duration);
+
+    // List reservations, search by invalid end time == -1.
+    ReservationListRequest request = ReservationListRequest
+        .newInstance(ReservationSystemTestUtil.reservationQ, "", 1, -1, true);
+
+    ReservationListResponse response = null;
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+    Assert.assertNotNull(response);
+    Assert.assertEquals(1, response.getReservationAllocationState().size());
+    Assert.assertEquals(response.getReservationAllocationState().get(0)
+        .getReservationId().getId(), sRequest.getReservationId().getId());
+
+    // List reservations, search by invalid end time < -1.
+    request = ReservationListRequest
+        .newInstance(ReservationSystemTestUtil.reservationQ, "", 1, -10, true);
+
+    response = null;
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+    Assert.assertNotNull(response);
+    Assert.assertEquals(1, response.getReservationAllocationState().size());
+    Assert.assertEquals(response.getReservationAllocationState().get(0)
+        .getReservationId().getId(), sRequest.getReservationId().getId());
+
+    rm.stop();
+  }
+
+  @Test
+  public void testListReservationsByTimeIntervalContainingNoReservations() {
+    ResourceManager rm = setupResourceManager();
+    ClientRMService clientService = rm.getClientRMService();
+    Clock clock = new UTCClock();
+    long arrival = clock.getTime();
+    long duration = 60000;
+    long deadline = (long) (arrival + 1.05 * duration);
+    ReservationSubmissionRequest sRequest =
+        submitReservationTestHelper(clientService, arrival, deadline, duration);
+
+    // List reservations, search by very large start time.
+    ReservationListRequest request = ReservationListRequest.newInstance(
+        ReservationSystemTestUtil.reservationQ, "", Long.MAX_VALUE, -1, false);
+
+    ReservationListResponse response = null;
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+
+    // Ensure all reservations are filtered out.
+    Assert.assertNotNull(response);
+    Assert.assertEquals(response.getReservationAllocationState().size(), 0);
+
+    duration = 30000;
+    deadline = sRequest.getReservationDefinition().getDeadline();
+
+    // List reservations, search by start time after the reservation
+    // end time.
+    request = ReservationListRequest.newInstance(
+        ReservationSystemTestUtil.reservationQ, "", deadline + duration,
+        deadline + 2 * duration, false);
+
+    response = null;
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+
+    // Ensure all reservations are filtered out.
+    Assert.assertNotNull(response);
+    Assert.assertEquals(response.getReservationAllocationState().size(), 0);
+
+    arrival = clock.getTime();
+    // List reservations, search by end time before the reservation start
+    // time.
+    request = ReservationListRequest.newInstance(
+        ReservationSystemTestUtil.reservationQ, "", 0, arrival - duration,
+        false);
+
+    response = null;
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+
+    // Ensure all reservations are filtered out.
+    Assert.assertNotNull(response);
+    Assert.assertEquals(response.getReservationAllocationState().size(), 0);
+
+    // List reservations, search by very small end time.
+    request = ReservationListRequest
+        .newInstance(ReservationSystemTestUtil.reservationQ, "", 0, 1, false);
+
+    response = null;
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+
+    // Ensure all reservations are filtered out.
+    Assert.assertNotNull(response);
+    Assert.assertEquals(response.getReservationAllocationState().size(), 0);
+
+    rm.stop();
+  }
+
+  @Test
+  public void testReservationDelete() {
+    ResourceManager rm = setupResourceManager();
+    ClientRMService clientService = rm.getClientRMService();
+    Clock clock = new UTCClock();
+    long arrival = clock.getTime();
+    long duration = 60000;
+    long deadline = (long) (arrival + 1.05 * duration);
+    ReservationSubmissionRequest sRequest =
+        submitReservationTestHelper(clientService, arrival, deadline, duration);
+
+    ReservationId reservationID = sRequest.getReservationId();
     // Delete the reservation
     ReservationDeleteRequest dRequest =
         ReservationDeleteRequest.newInstance(reservationID);
@@ -1331,33 +1533,26 @@ public class TestClientRMService {
     } catch (Exception e) {
       Assert.fail(e.getMessage());
     }
-    Assert.assertNotNull(sResponse);
-    LOG.info("Delete reservation response: " + dResponse);
+    Assert.assertNotNull(dResponse);
+    System.out.println("Delete reservation response: " + dResponse);
 
-    // clean-up
+    // List reservations, search by non-existent reservationID
+    ReservationListRequest request = ReservationListRequest.newInstance(
+        ReservationSystemTestUtil.reservationQ, reservationID.toString(), -1,
+        -1, false);
+
+    ReservationListResponse response = null;
+    try {
+      response = clientService.listReservations(request);
+    } catch (Exception e) {
+      Assert.fail(e.getMessage());
+    }
+    Assert.assertNotNull(response);
+    Assert.assertEquals(0, response.getReservationAllocationState().size());
+
     rm.stop();
-    nm = null;
-    rm = null;
   }
 
-  private ReservationSubmissionRequest createSimpleReservationRequest(
-      int numContainers, long arrival, long deadline, long duration) {
-    // create a request with a single atomic ask
-    ReservationRequest r =
-        ReservationRequest.newInstance(Resource.newInstance(1024, 1),
-            numContainers, 1, duration);
-    ReservationRequests reqs =
-        ReservationRequests.newInstance(Collections.singletonList(r),
-            ReservationRequestInterpreter.R_ALL);
-    ReservationDefinition rDef =
-        ReservationDefinition.newInstance(arrival, deadline, reqs,
-            "testClientRMService#reservation");
-    ReservationSubmissionRequest request =
-        ReservationSubmissionRequest.newInstance(rDef,
-            ReservationSystemTestUtil.reservationQ);
-    return request;
-  }
-  
   @Test
   public void testGetNodeLabels() throws Exception {
     MockRM rm = new MockRM() {
@@ -1369,12 +1564,16 @@ public class TestClientRMService {
       };
     };
     rm.start();
+    NodeLabel labelX = NodeLabel.newInstance("x", false);
+    NodeLabel labelY = NodeLabel.newInstance("y");
     RMNodeLabelsManager labelsMgr = rm.getRMContext().getNodeLabelManager();
-    labelsMgr.addToCluserNodeLabels(ImmutableSet.of("x", "y"));
+    labelsMgr.addToCluserNodeLabels(ImmutableSet.of(labelX, labelY));
 
+    NodeId node1 = NodeId.newInstance("host1", 1234);
+    NodeId node2 = NodeId.newInstance("host2", 1234);
     Map<NodeId, Set<String>> map = new HashMap<NodeId, Set<String>>();
-    map.put(NodeId.newInstance("host1", 0), ImmutableSet.of("x"));
-    map.put(NodeId.newInstance("host2", 0), ImmutableSet.of("y"));
+    map.put(node1, ImmutableSet.of("x"));
+    map.put(node2, ImmutableSet.of("y"));
     labelsMgr.replaceLabelsOnNode(map);
 
     // Create a client.
@@ -1382,29 +1581,310 @@ public class TestClientRMService {
     YarnRPC rpc = YarnRPC.create(conf);
     InetSocketAddress rmAddress = rm.getClientRMService().getBindAddress();
     LOG.info("Connecting to ResourceManager at " + rmAddress);
-    ApplicationClientProtocol client =
-        (ApplicationClientProtocol) rpc.getProxy(
-            ApplicationClientProtocol.class, rmAddress, conf);
+    ApplicationClientProtocol client = (ApplicationClientProtocol) rpc
+        .getProxy(ApplicationClientProtocol.class, rmAddress, conf);
 
     // Get node labels collection
-    GetClusterNodeLabelsResponse response =
-        client.getClusterNodeLabels(GetClusterNodeLabelsRequest.newInstance());
-    Assert.assertTrue(response.getNodeLabels().containsAll(
-        Arrays.asList("x", "y")));
+    GetClusterNodeLabelsResponse response = client
+        .getClusterNodeLabels(GetClusterNodeLabelsRequest.newInstance());
+    Assert.assertTrue(response.getNodeLabelList().containsAll(
+        Arrays.asList(labelX, labelY)));
 
     // Get node labels mapping
-    GetNodesToLabelsResponse response1 =
-        client.getNodeToLabels(GetNodesToLabelsRequest.newInstance());
+    GetNodesToLabelsResponse response1 = client
+        .getNodeToLabels(GetNodesToLabelsRequest.newInstance());
     Map<NodeId, Set<String>> nodeToLabels = response1.getNodeToLabels();
     Assert.assertTrue(nodeToLabels.keySet().containsAll(
-        Arrays.asList(NodeId.newInstance("host1", 0),
-            NodeId.newInstance("host2", 0))));
-    Assert.assertTrue(nodeToLabels.get(NodeId.newInstance("host1", 0))
-        .containsAll(Arrays.asList("x")));
-    Assert.assertTrue(nodeToLabels.get(NodeId.newInstance("host2", 0))
-        .containsAll(Arrays.asList("y")));
-    
+        Arrays.asList(node1, node2)));
+    Assert.assertTrue(nodeToLabels.get(node1)
+        .containsAll(Arrays.asList(labelX.getName())));
+    Assert.assertTrue(nodeToLabels.get(node2)
+        .containsAll(Arrays.asList(labelY.getName())));
+    // Below label "x" is not present in the response as exclusivity is true
+    Assert.assertFalse(nodeToLabels.get(node1).containsAll(
+        Arrays.asList(NodeLabel.newInstance("x"))));
+
+    rpc.stopProxy(client, conf);
+    rm.stop();
+  }
+
+  @Test
+  public void testGetLabelsToNodes() throws Exception {
+    MockRM rm = new MockRM() {
+      protected ClientRMService createClientRMService() {
+        return new ClientRMService(this.rmContext, scheduler,
+            this.rmAppManager, this.applicationACLsManager,
+            this.queueACLsManager, this.getRMContext()
+                .getRMDelegationTokenSecretManager());
+      };
+    };
+    rm.start();
+
+    NodeLabel labelX = NodeLabel.newInstance("x", false);
+    NodeLabel labelY = NodeLabel.newInstance("y", false);
+    NodeLabel labelZ = NodeLabel.newInstance("z", false);
+    RMNodeLabelsManager labelsMgr = rm.getRMContext().getNodeLabelManager();
+    labelsMgr.addToCluserNodeLabels(ImmutableSet.of(labelX, labelY, labelZ));
+
+    NodeId node1A = NodeId.newInstance("host1", 1234);
+    NodeId node1B = NodeId.newInstance("host1", 5678);
+    NodeId node2A = NodeId.newInstance("host2", 1234);
+    NodeId node3A = NodeId.newInstance("host3", 1234);
+    NodeId node3B = NodeId.newInstance("host3", 5678);
+    Map<NodeId, Set<String>> map = new HashMap<NodeId, Set<String>>();
+    map.put(node1A, ImmutableSet.of("x"));
+    map.put(node1B, ImmutableSet.of("z"));
+    map.put(node2A, ImmutableSet.of("y"));
+    map.put(node3A, ImmutableSet.of("y"));
+    map.put(node3B, ImmutableSet.of("z"));
+    labelsMgr.replaceLabelsOnNode(map);
+
+    // Create a client.
+    Configuration conf = new Configuration();
+    YarnRPC rpc = YarnRPC.create(conf);
+    InetSocketAddress rmAddress = rm.getClientRMService().getBindAddress();
+    LOG.info("Connecting to ResourceManager at " + rmAddress);
+    ApplicationClientProtocol client = (ApplicationClientProtocol) rpc
+        .getProxy(ApplicationClientProtocol.class, rmAddress, conf);
+
+    // Get node labels collection
+    GetClusterNodeLabelsResponse response = client
+        .getClusterNodeLabels(GetClusterNodeLabelsRequest.newInstance());
+    Assert.assertTrue(response.getNodeLabelList().containsAll(
+        Arrays.asList(labelX, labelY, labelZ)));
+
+    // Get labels to nodes mapping
+    GetLabelsToNodesResponse response1 = client
+        .getLabelsToNodes(GetLabelsToNodesRequest.newInstance());
+    Map<String, Set<NodeId>> labelsToNodes = response1.getLabelsToNodes();
+    Assert.assertTrue(labelsToNodes.keySet().containsAll(
+        Arrays.asList(labelX.getName(), labelY.getName(), labelZ.getName())));
+    Assert.assertTrue(labelsToNodes.get(labelX.getName()).containsAll(
+        Arrays.asList(node1A)));
+    Assert.assertTrue(labelsToNodes.get(labelY.getName()).containsAll(
+        Arrays.asList(node2A, node3A)));
+    Assert.assertTrue(labelsToNodes.get(labelZ.getName()).containsAll(
+        Arrays.asList(node1B, node3B)));
+
+    // Get labels to nodes mapping for specific labels
+    Set<String> setlabels = new HashSet<String>(Arrays.asList(new String[]{"x",
+        "z"}));
+    GetLabelsToNodesResponse response2 = client
+        .getLabelsToNodes(GetLabelsToNodesRequest.newInstance(setlabels));
+    labelsToNodes = response2.getLabelsToNodes();
+    Assert.assertTrue(labelsToNodes.keySet().containsAll(
+        Arrays.asList(labelX.getName(), labelZ.getName())));
+    Assert.assertTrue(labelsToNodes.get(labelX.getName()).containsAll(
+        Arrays.asList(node1A)));
+    Assert.assertTrue(labelsToNodes.get(labelZ.getName()).containsAll(
+        Arrays.asList(node1B, node3B)));
+    Assert.assertEquals(labelsToNodes.get(labelY.getName()), null);
+
     rpc.stopProxy(client, conf);
     rm.close();
+  }
+
+  @Test(timeout = 120000)
+  public void testUpdatePriorityAndKillAppWithZeroClusterResource()
+      throws Exception {
+    int maxPriority = 10;
+    int appPriority = 5;
+    YarnConfiguration conf = new YarnConfiguration();
+    Assume.assumeFalse("FairScheduler does not support Application Priorities",
+        conf.get(YarnConfiguration.RM_SCHEDULER)
+            .equals(FairScheduler.class.getName()));
+    conf.setInt(YarnConfiguration.MAX_CLUSTER_LEVEL_APPLICATION_PRIORITY,
+        maxPriority);
+    MockRM rm = new MockRM(conf);
+    rm.init(conf);
+    rm.start();
+    RMApp app1 = rm.submitApp(1024, Priority.newInstance(appPriority));
+    ClientRMService rmService = rm.getClientRMService();
+    testApplicationPriorityUpdation(rmService, app1, appPriority, appPriority);
+    rm.killApp(app1.getApplicationId());
+    rm.waitForState(app1.getApplicationId(), RMAppState.KILLED);
+    rm.stop();
+  }
+
+  @Test(timeout = 120000)
+  public void testUpdateApplicationPriorityRequest() throws Exception {
+    int maxPriority = 10;
+    int appPriority = 5;
+    YarnConfiguration conf = new YarnConfiguration();
+    Assume.assumeFalse("FairScheduler does not support Application Priorities",
+        conf.get(YarnConfiguration.RM_SCHEDULER)
+            .equals(FairScheduler.class.getName()));
+    conf.setInt(YarnConfiguration.MAX_CLUSTER_LEVEL_APPLICATION_PRIORITY,
+        maxPriority);
+    MockRM rm = new MockRM(conf);
+    rm.init(conf);
+    rm.start();
+    rm.registerNode("host1:1234", 1024);
+    // Start app1 with appPriority 5
+    RMApp app1 = rm.submitApp(1024, Priority.newInstance(appPriority));
+
+    Assert.assertEquals("Incorrect priority has been set to application",
+        appPriority, app1.getApplicationPriority().getPriority());
+
+    appPriority = 11;
+    ClientRMService rmService = rm.getClientRMService();
+    testApplicationPriorityUpdation(rmService, app1, appPriority, maxPriority);
+
+    appPriority = 9;
+    testApplicationPriorityUpdation(rmService, app1, appPriority, appPriority);
+
+    rm.killApp(app1.getApplicationId());
+    rm.waitForState(app1.getApplicationId(), RMAppState.KILLED);
+
+
+    // Update priority request for invalid application id.
+    ApplicationId invalidAppId = ApplicationId.newInstance(123456789L, 3);
+    UpdateApplicationPriorityRequest updateRequest =
+        UpdateApplicationPriorityRequest.newInstance(invalidAppId,
+            Priority.newInstance(appPriority));
+    try {
+      rmService.updateApplicationPriority(updateRequest);
+      Assert.fail("ApplicationNotFoundException should be thrown "
+          + "for invalid application id");
+    } catch (ApplicationNotFoundException e) {
+      // Expected
+    }
+
+    updateRequest =
+        UpdateApplicationPriorityRequest.newInstance(app1.getApplicationId(),
+            Priority.newInstance(11));
+    Assert.assertEquals("Incorrect priority has been set to application",
+        appPriority, rmService.updateApplicationPriority(updateRequest)
+            .getApplicationPriority().getPriority());
+
+    rm.stop();
+  }
+
+  private void testApplicationPriorityUpdation(ClientRMService rmService,
+      RMApp app1, int tobeUpdatedPriority, int expected) throws YarnException,
+      IOException {
+    UpdateApplicationPriorityRequest updateRequest =
+        UpdateApplicationPriorityRequest.newInstance(app1.getApplicationId(),
+            Priority.newInstance(tobeUpdatedPriority));
+
+    UpdateApplicationPriorityResponse updateApplicationPriority =
+        rmService.updateApplicationPriority(updateRequest);
+
+    Assert.assertEquals("Incorrect priority has been set to application",
+        expected, app1.getApplicationSubmissionContext().getPriority()
+            .getPriority());
+    Assert.assertEquals("Incorrect priority has been returned", expected,
+        updateApplicationPriority.getApplicationPriority().getPriority());
+  }
+
+  private void createExcludeFile(String filename) throws IOException {
+    File file = new File(filename);
+    if (file.exists()) {
+      file.delete();
+    }
+
+    FileOutputStream out = new FileOutputStream(file);
+    out.write("decommisssionedHost".getBytes());
+    out.close();
+  }
+
+  @Test
+  public void testRMStartWithDecommissionedNode() throws Exception {
+    String excludeFile = "excludeFile";
+    createExcludeFile(excludeFile);
+    YarnConfiguration conf = new YarnConfiguration();
+    conf.set(YarnConfiguration.RM_NODES_EXCLUDE_FILE_PATH,
+        excludeFile);
+    MockRM rm = new MockRM(conf) {
+      protected ClientRMService createClientRMService() {
+        return new ClientRMService(this.rmContext, scheduler,
+            this.rmAppManager, this.applicationACLsManager, this.queueACLsManager,
+            this.getRMContext().getRMDelegationTokenSecretManager());
+      };
+    };
+    rm.start();
+
+    YarnRPC rpc = YarnRPC.create(conf);
+    InetSocketAddress rmAddress = rm.getClientRMService().getBindAddress();
+    LOG.info("Connecting to ResourceManager at " + rmAddress);
+    ApplicationClientProtocol client =
+        (ApplicationClientProtocol) rpc
+            .getProxy(ApplicationClientProtocol.class, rmAddress, conf);
+
+    // Make call
+    GetClusterNodesRequest request =
+        GetClusterNodesRequest.newInstance(EnumSet.allOf(NodeState.class));
+    List<NodeReport> nodeReports = client.getClusterNodes(request).getNodeReports();
+    Assert.assertEquals(1, nodeReports.size());
+
+    rm.stop();
+    rpc.stopProxy(client, conf);
+    new File(excludeFile).delete();
+  }
+
+  @Test
+  public void testGetApplicationsWithPerUserApps()
+      throws IOException, YarnException {
+    /*
+     * Submit 3 applications alternately in two queues
+     */
+    // Basic setup
+    YarnScheduler yarnScheduler = mockYarnScheduler();
+    RMContext rmContext = mock(RMContext.class);
+    mockRMContext(yarnScheduler, rmContext);
+    RMStateStore stateStore = mock(RMStateStore.class);
+    when(rmContext.getStateStore()).thenReturn(stateStore);
+
+    RMAppManager appManager = new RMAppManager(rmContext, yarnScheduler, null,
+        mock(ApplicationACLsManager.class), new Configuration());
+    when(rmContext.getDispatcher().getEventHandler())
+        .thenReturn(new EventHandler<Event>() {
+          public void handle(Event event) {
+          }
+        });
+
+    // Simulate Queue ACL manager which returns false always
+    QueueACLsManager queueAclsManager = mock(QueueACLsManager.class);
+    when(queueAclsManager.checkAccess(any(UserGroupInformation.class),
+        any(QueueACL.class), any(RMApp.class), any(String.class),
+        anyListOf(String.class))).thenReturn(false);
+
+    // Simulate app ACL manager which returns false always
+    ApplicationACLsManager appAclsManager = mock(ApplicationACLsManager.class);
+    when(appAclsManager.checkAccess(eq(UserGroupInformation.getCurrentUser()),
+        any(ApplicationAccessType.class), any(String.class),
+        any(ApplicationId.class))).thenReturn(false);
+    ClientRMService rmService = new ClientRMService(rmContext, yarnScheduler,
+        appManager, appAclsManager, queueAclsManager, null);
+    rmService.init(new Configuration());
+
+    // Initialize appnames and queues
+    String[] queues = {QUEUE_1, QUEUE_2};
+    String[] appNames = {MockApps.newAppName(), MockApps.newAppName(),
+        MockApps.newAppName()};
+    ApplicationId[] appIds = {getApplicationId(101), getApplicationId(102),
+        getApplicationId(103)};
+    List<String> tags = Arrays.asList("Tag1", "Tag2", "Tag3");
+
+    long[] submitTimeMillis = new long[3];
+    // Submit applications
+    for (int i = 0; i < appIds.length; i++) {
+      ApplicationId appId = appIds[i];
+      SubmitApplicationRequest submitRequest = mockSubmitAppRequest(appId,
+          appNames[i], queues[i % queues.length],
+          new HashSet<String>(tags.subList(0, i + 1)));
+      rmService.submitApplication(submitRequest);
+      submitTimeMillis[i] = System.currentTimeMillis();
+    }
+
+    // Test different cases of ClientRMService#getApplications()
+    GetApplicationsRequest request = GetApplicationsRequest.newInstance();
+    assertEquals("Incorrect total number of apps", 6,
+        rmService.getApplications(request).getApplicationList().size());
+
+    rmService.setDisplayPerUserApps(true);
+    assertEquals("Incorrect number of applications for user", 0,
+        rmService.getApplications(request).getApplicationList().size());
+    rmService.setDisplayPerUserApps(false);
   }
 }

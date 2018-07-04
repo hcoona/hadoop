@@ -31,6 +31,8 @@ import org.apache.hadoop.yarn.proto.YarnProtos.LocalResourceProto;
 import org.apache.hadoop.yarn.proto.YarnServerNodemanagerRecoveryProtos.ContainerManagerApplicationProto;
 import org.apache.hadoop.yarn.proto.YarnServerNodemanagerRecoveryProtos.DeletionServiceDeleteTaskProto;
 import org.apache.hadoop.yarn.proto.YarnServerNodemanagerRecoveryProtos.LocalizedResourceProto;
+import org.apache.hadoop.yarn.proto.YarnServerNodemanagerRecoveryProtos.LogDeleterProto;
+import org.apache.hadoop.yarn.security.ContainerTokenIdentifier;
 import org.apache.hadoop.yarn.server.api.records.MasterKey;
 
 // The state store to use when state isn't being stored
@@ -57,10 +59,6 @@ public class NMNullStateStoreService extends NMStateStoreService {
   }
 
   @Override
-  public void storeFinishedApplication(ApplicationId appId) {
-  }
-
-  @Override
   public void removeApplication(ApplicationId appId) throws IOException {
   }
 
@@ -72,8 +70,21 @@ public class NMNullStateStoreService extends NMStateStoreService {
   }
 
   @Override
-  public void storeContainer(ContainerId containerId,
-      StartContainerRequest startRequest) throws IOException {
+  public void storeContainer(ContainerId containerId, int version,
+      long startTime, StartContainerRequest startRequest) throws IOException {
+  }
+
+  @Override
+  public void storeContainerQueued(ContainerId containerId) throws IOException {
+  }
+
+  @Override
+  public void storeContainerPaused(ContainerId containerId) throws IOException {
+  }
+
+  @Override
+  public void removeContainerPaused(ContainerId containerId)
+      throws IOException {
   }
 
   @Override
@@ -87,6 +98,11 @@ public class NMNullStateStoreService extends NMStateStoreService {
   }
 
   @Override
+  public void storeContainerUpdateToken(ContainerId containerId,
+      ContainerTokenIdentifier containerTokenIdentifier) throws IOException {
+  }
+
+  @Override
   public void storeContainerKilled(ContainerId containerId)
       throws IOException {
   }
@@ -94,6 +110,21 @@ public class NMNullStateStoreService extends NMStateStoreService {
   @Override
   public void storeContainerCompleted(ContainerId containerId, int exitCode)
       throws IOException {
+  }
+
+  @Override
+  public void storeContainerRemainingRetryAttempts(ContainerId containerId,
+      int remainingRetryAttempts) throws IOException {
+  }
+
+  @Override
+  public void storeContainerWorkDir(ContainerId containerId,
+      String workDir) throws IOException {
+  }
+
+  @Override
+  public void storeContainerLogDir(ContainerId containerId,
+      String logDir) throws IOException {
   }
 
   @Override
@@ -188,6 +219,50 @@ public class NMNullStateStoreService extends NMStateStoreService {
 
   @Override
   public void removeContainerToken(ContainerId containerId)
+      throws IOException {
+  }
+
+  @Override
+  public RecoveredLogDeleterState loadLogDeleterState() throws IOException {
+    throw new UnsupportedOperationException(
+        "Recovery not supported by this state store");
+  }
+
+  @Override
+  public void storeLogDeleter(ApplicationId appId, LogDeleterProto proto)
+      throws IOException {
+  }
+
+  @Override
+  public void removeLogDeleter(ApplicationId appId) throws IOException {
+  }
+
+  @Override
+  public RecoveredAMRMProxyState loadAMRMProxyState() throws IOException {
+    throw new UnsupportedOperationException(
+        "Recovery not supported by this state store");
+  }
+
+  @Override
+  public void storeAMRMProxyCurrentMasterKey(MasterKey key) throws IOException {
+  }
+
+  @Override
+  public void storeAMRMProxyNextMasterKey(MasterKey key) throws IOException {
+  }
+
+  @Override
+  public void storeAMRMProxyAppContextEntry(ApplicationAttemptId attempt,
+      String key, byte[] data) throws IOException {
+  }
+
+  @Override
+  public void removeAMRMProxyAppContextEntry(ApplicationAttemptId attempt,
+      String key) throws IOException {
+  }
+
+  @Override
+  public void removeAMRMProxyAppContext(ApplicationAttemptId attempt)
       throws IOException {
   }
 

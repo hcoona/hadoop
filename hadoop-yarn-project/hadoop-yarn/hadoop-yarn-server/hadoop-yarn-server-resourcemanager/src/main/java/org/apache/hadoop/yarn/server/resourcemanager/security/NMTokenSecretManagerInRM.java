@@ -78,7 +78,7 @@ public class NMTokenSecretManagerInRM extends BaseNMTokenSecretManager {
     if (rollingInterval <= activationDelay * 2) {
       throw new IllegalArgumentException(
           YarnConfiguration.RM_NMTOKEN_MASTER_KEY_ROLLING_INTERVAL_SECS
-              + " should be more than 2 X "
+              + " should be more than 3 X "
               + YarnConfiguration.RM_NM_EXPIRY_INTERVAL_MS);
     }
     appAttemptToNodeKeyMap =
@@ -192,7 +192,7 @@ public class NMTokenSecretManagerInRM extends BaseNMTokenSecretManager {
   public NMToken createAndGetNMToken(String applicationSubmitter,
       ApplicationAttemptId appAttemptId, Container container) {
     try {
-      this.readLock.lock();
+      this.writeLock.lock();
       HashSet<NodeId> nodeSet = this.appAttemptToNodeKeyMap.get(appAttemptId);
       NMToken nmToken = null;
       if (nodeSet != null) {
@@ -208,7 +208,7 @@ public class NMTokenSecretManagerInRM extends BaseNMTokenSecretManager {
       }
       return nmToken;
     } finally {
-      this.readLock.unlock();
+      this.writeLock.unlock();
     }
   }
 

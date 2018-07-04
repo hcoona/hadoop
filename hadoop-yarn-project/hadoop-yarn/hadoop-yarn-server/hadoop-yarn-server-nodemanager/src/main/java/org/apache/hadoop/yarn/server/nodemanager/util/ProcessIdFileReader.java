@@ -19,13 +19,15 @@ package org.apache.hadoop.yarn.server.nodemanager.util;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.Shell;
+import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.util.ConverterUtils;
 
 /**
@@ -33,7 +35,8 @@ import org.apache.hadoop.yarn.util.ConverterUtils;
  */
 public class ProcessIdFileReader {
 
-  private static final Log LOG = LogFactory.getLog(ProcessIdFileReader.class);
+  private static final Logger LOG =
+       LoggerFactory.getLogger(ProcessIdFileReader.class);
   
   /**
    * Get the process id from specified file path.
@@ -46,17 +49,18 @@ public class ProcessIdFileReader {
     if (path == null) {
       throw new IOException("Trying to access process id from a null path");
     }
-    
-    LOG.debug("Accessing pid from pid file " + path);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Accessing pid from pid file " + path);
+    }
     String processId = null;
-    FileReader fileReader = null;
     BufferedReader bufReader = null;
 
     try {
       File file = new File(path.toString());
       if (file.exists()) {
-        fileReader = new FileReader(file);
-        bufReader = new BufferedReader(fileReader);
+        FileInputStream fis = new FileInputStream(file);
+        bufReader = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
+
         while (true) {
           String line = bufReader.readLine();
           if (line == null) {
@@ -68,7 +72,7 @@ public class ProcessIdFileReader {
               // On Windows, pid is expected to be a container ID, so find first
               // line that parses successfully as a container ID.
               try {
-                ConverterUtils.toContainerId(temp);
+                ContainerId.fromString(temp);
                 processId = temp;
                 break;
               } catch (Exception e) {
@@ -78,7 +82,7 @@ public class ProcessIdFileReader {
             else {
               // Otherwise, find first line containing a numeric pid.
               try {
-                Long pid = Long.valueOf(temp);
+                long pid = Long.parseLong(temp);
                 if (pid > 0) {
                   processId = temp;
                   break;
@@ -91,16 +95,14 @@ public class ProcessIdFileReader {
         }
       }
     } finally {
-      if (fileReader != null) {
-        fileReader.close();
-      }
       if (bufReader != null) {
         bufReader.close();
       }
     }
-    LOG.debug("Got pid " 
-        + (processId != null? processId : "null")  
-        + " from path " + path);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Got pid " + (processId != null ? processId : "null")
+          + " from path " + path);
+    }
     return processId;
   }
 

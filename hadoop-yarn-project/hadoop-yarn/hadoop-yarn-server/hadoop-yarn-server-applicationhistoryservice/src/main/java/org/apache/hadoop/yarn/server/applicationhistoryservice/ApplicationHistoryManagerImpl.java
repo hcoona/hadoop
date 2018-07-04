@@ -23,8 +23,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.service.AbstractService;
@@ -42,11 +40,13 @@ import org.apache.hadoop.yarn.server.applicationhistoryservice.records.Container
 import org.apache.hadoop.yarn.webapp.util.WebAppUtils;
 
 import com.google.common.annotations.VisibleForTesting;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ApplicationHistoryManagerImpl extends AbstractService implements
     ApplicationHistoryManager {
-  private static final Log LOG = LogFactory
-    .getLog(ApplicationHistoryManagerImpl.class);
+  private static final Logger LOG = LoggerFactory
+    .getLogger(ApplicationHistoryManagerImpl.class);
   private static final String UNAVAILABLE = "N/A";
 
   private ApplicationHistoryStore historyStore;
@@ -98,8 +98,8 @@ public class ApplicationHistoryManagerImpl extends AbstractService implements
   }
 
   @Override
-  public Map<ApplicationId, ApplicationReport> getAllApplications()
-      throws IOException {
+  public Map<ApplicationId, ApplicationReport> getApplications(long appsNum,
+      long appStartedTimeBegin, long appStartedTimeEnd) throws IOException {
     Map<ApplicationId, ApplicationHistoryData> histData =
         historyStore.getAllApplications();
     HashMap<ApplicationId, ApplicationReport> applicationsReport =
@@ -215,7 +215,7 @@ public class ApplicationHistoryManagerImpl extends AbstractService implements
       containerHistory.getStartTime(), containerHistory.getFinishTime(),
       containerHistory.getDiagnosticsInfo(), logUrl,
       containerHistory.getContainerExitStatus(),
-      containerHistory.getContainerState());
+      containerHistory.getContainerState(), null);
   }
 
   @Override

@@ -55,17 +55,26 @@ bin=`dirname "${BASH_SOURCE-$0}"`
 bin=`cd "$bin"; pwd`
 
 DEFAULT_LIBEXEC_DIR="$bin"/../libexec
+
 HADOOP_LIBEXEC_DIR=${HADOOP_LIBEXEC_DIR:-$DEFAULT_LIBEXEC_DIR}
 . $HADOOP_LIBEXEC_DIR/yarn-config.sh
 
 function print_usage(){
-  echo "Usage: yarn [--config confdir] COMMAND"
-  echo "where COMMAND is one of:"
-  echo "  resourcemanager -format-state-store   deletes the RMStateStore"
+  echo "Usage: yarn [--config confdir] [COMMAND | CLASSNAME]"
+  echo "  CLASSNAME                             run the class named CLASSNAME"
+  echo " or"
+  echo "  where COMMAND is one of:"
   echo "  resourcemanager                       run the ResourceManager"
+  echo "                                        Use -format-state-store for deleting the RMStateStore."
+  echo "                                        Use -remove-application-from-state-store <appId> for "
+  echo "                                            removing application from RMStateStore."
   echo "  nodemanager                           run a nodemanager on each slave"
+  echo "  timelinereader                        run the timeline reader server"
   echo "  timelineserver                        run the timeline server"
   echo "  rmadmin                               admin tools"
+  echo "  router                                run the Router daemon"
+  echo "  sharedcachemanager                    run the SharedCacheManager daemon"
+  echo "  scmadmin                              SharedCacheManager admin tools"
   echo "  version                               print the version"
   echo "  jar <jar>                             run a jar file"
   echo "  application                           prints application(s)"
@@ -76,13 +85,15 @@ function print_usage(){
   echo "  node                                  prints node report(s)"
   echo "  queue                                 prints queue information"
   echo "  logs                                  dump container logs"
+  echo "  schedulerconf                         updates scheduler configuration"
   echo "  classpath                             prints the class path needed to"
   echo "                                        get the Hadoop jar and the"
   echo "                                        required libraries"
+  echo "  cluster                               prints cluster information"
   echo "  daemonlog                             get/set the log level for each"
   echo "                                        daemon"
-  echo " or"
-  echo "  CLASSNAME                             run the class named CLASSNAME"
+  echo "  top                                   run cluster usage tool"
+  echo ""
   echo "Most commands print help when invoked w/o parameters."
 }
 
@@ -169,6 +180,9 @@ fi
 if [ -d "$HADOOP_YARN_HOME/build/tools" ]; then
   CLASSPATH=${CLASSPATH}:$HADOOP_YARN_HOME/build/tools
 fi
+if [ -d "$HADOOP_YARN_HOME/yarn-server/yarn-server-router/target/classes" ]; then
+  CLASSPATH=${CLASSPATH}:$HADOOP_YARN_HOME/yarn-server/yarn-server-router/target/classes
+fi
 
 CLASSPATH=${CLASSPATH}:$HADOOP_YARN_HOME/${YARN_DIR}/*
 CLASSPATH=${CLASSPATH}:$HADOOP_YARN_HOME/${YARN_LIB_JARS_DIR}/*
@@ -200,10 +214,24 @@ unset IFS
 
 # figure out which class to run
 if [ "$COMMAND" = "classpath" ] ; then
-  echo $CLASSPATH
-  exit
+  if [ "$#" -gt 0 ]; then
+    CLASS=org.apache.hadoop.util.Classpath
+  else
+    if [ "$cygwin" = true ]; then
+      CLASSPATH=$(cygpath -p -w "$CLASSPATH" 2>/dev/null)
+    fi
+    echo $CLASSPATH
+    exit 0
+  fi
 elif [ "$COMMAND" = "rmadmin" ] ; then
   CLASS='org.apache.hadoop.yarn.client.cli.RMAdminCLI'
+  YARN_OPTS="$YARN_OPTS $YARN_CLIENT_OPTS"
+elif [ "$COMMAND" = "router" ] ; then
+  CLASSPATH=${CLASSPATH}:$YARN_CONF_DIR/rt-config/log4j.properties
+  CLASS='org.apache.hadoop.yarn.server.router.Router'
+  YARN_OPTS="$YARN_OPTS $YARN_ROUTER_OPTS"
+elif [ "$COMMAND" = "scmadmin" ] ; then
+  CLASS='org.apache.hadoop.yarn.client.SCMAdmin'
   YARN_OPTS="$YARN_OPTS $YARN_CLIENT_OPTS"
 elif [ "$COMMAND" = "application" ] || 
      [ "$COMMAND" = "applicationattempt" ] || 
@@ -219,6 +247,8 @@ elif [ "$COMMAND" = "queue" ] ; then
   YARN_OPTS="$YARN_OPTS $YARN_CLIENT_OPTS"
 elif [ "$COMMAND" = "resourcemanager" ] ; then
   CLASSPATH=${CLASSPATH}:$YARN_CONF_DIR/rm-config/log4j.properties
+  CLASSPATH=${CLASSPATH}:"$HADOOP_YARN_HOME/$YARN_DIR/timelineservice/*"
+  CLASSPATH=${CLASSPATH}:"$HADOOP_YARN_HOME/$YARN_DIR/timelineservice/lib/*"
   CLASS='org.apache.hadoop.yarn.server.resourcemanager.ResourceManager'
   YARN_OPTS="$YARN_OPTS $YARN_RESOURCEMANAGER_OPTS"
   if [ "$YARN_RESOURCEMANAGER_HEAPSIZE" != "" ]; then
@@ -233,6 +263,10 @@ elif [ "$COMMAND" = "historyserver" ] ; then
   if [ "$YARN_HISTORYSERVER_HEAPSIZE" != "" ]; then
     JAVA_HEAP_MAX="-Xmx""$YARN_HISTORYSERVER_HEAPSIZE""m"
   fi
+elif [ "$COMMAND" = "timelinereader" ] ; then
+  CLASSPATH=${CLASSPATH}:"$HADOOP_YARN_HOME/$YARN_DIR/timelineservice/*"
+  CLASSPATH=${CLASSPATH}:"$HADOOP_YARN_HOME/$YARN_DIR/timelineservice/lib/*"
+  CLASS='org.apache.hadoop.yarn.server.timelineservice.reader.TimelineReaderServer'
 elif [ "$COMMAND" = "timelineserver" ] ; then
   CLASSPATH=${CLASSPATH}:$YARN_CONF_DIR/timelineserver-config/log4j.properties
   CLASS='org.apache.hadoop.yarn.server.applicationhistoryservice.ApplicationHistoryServer'
@@ -240,8 +274,17 @@ elif [ "$COMMAND" = "timelineserver" ] ; then
   if [ "$YARN_TIMELINESERVER_HEAPSIZE" != "" ]; then
     JAVA_HEAP_MAX="-Xmx""$YARN_TIMELINESERVER_HEAPSIZE""m"
   fi
+elif [ "$COMMAND" = "sharedcachemanager" ] ; then
+  CLASSPATH=${CLASSPATH}:$YARN_CONF_DIR/scm-config/log4j.properties
+  CLASS='org.apache.hadoop.yarn.server.sharedcachemanager.SharedCacheManager'
+  YARN_OPTS="$YARN_OPTS $YARN_SHAREDCACHEMANAGER_OPTS"
+  if [ "$YARN_SHAREDCACHEMANAGER_HEAPSIZE" != "" ]; then
+    JAVA_HEAP_MAX="-Xmx""$YARN_SHAREDCACHEMANAGER_HEAPSIZE""m"
+  fi
 elif [ "$COMMAND" = "nodemanager" ] ; then
   CLASSPATH=${CLASSPATH}:$YARN_CONF_DIR/nm-config/log4j.properties
+  CLASSPATH=${CLASSPATH}:"$HADOOP_YARN_HOME/$YARN_DIR/timelineservice/*"
+  CLASSPATH=${CLASSPATH}:"$HADOOP_YARN_HOME/$YARN_DIR/timelineservice/lib/*"
   CLASS='org.apache.hadoop.yarn.server.nodemanager.NodeManager'
   YARN_OPTS="$YARN_OPTS -server $YARN_NODEMANAGER_OPTS"
   if [ "$YARN_NODEMANAGER_HEAPSIZE" != "" ]; then
@@ -265,8 +308,56 @@ elif [ "$COMMAND" = "logs" ] ; then
 elif [ "$COMMAND" = "daemonlog" ] ; then
   CLASS=org.apache.hadoop.log.LogLevel
   YARN_OPTS="$YARN_OPTS $YARN_CLIENT_OPTS"
+elif [ "$COMMAND" = "cluster" ] ; then
+  CLASS=org.apache.hadoop.yarn.client.cli.ClusterCLI
+  YARN_OPTS="$YARN_OPTS $YARN_CLIENT_OPTS"
+elif [ "$COMMAND" = "schedulerconf" ] ; then
+  CLASS=org.apache.hadoop.yarn.client.cli.SchedConfCLI
+  YARN_OPTS="$YARN_OPTS $YARN_CLIENT_OPTS"
+elif [ "$COMMAND" = "top" ]; then
+  CLASS=org.apache.hadoop.yarn.client.cli.TopCLI
+  YARN_OPTS="$YARN_OPTS $YARN_CLIENT_OPTS"
+  doNotSetCols=0
+  doNotSetRows=0
+  for i in "$@"; do
+    if [[ $i == "-cols" ]]; then
+      doNotSetCols=1
+    fi
+    if [[ $i == "-rows" ]]; then
+      doNotSetRows=1
+    fi
+  done
+  if [ $doNotSetCols == 0 ] && [ -n "${TERM}" ]; then
+    cols=$(tput cols)
+    if [ -n "$cols" ]; then
+      args=( $@ )
+      args=("${args[@]}" "-cols" "$cols")
+      set -- "${args[@]}"
+    fi
+  fi
+  if [ $doNotSetRows == 0 ] && [ -n "${TERM}" ]; then
+    rows=$(tput lines)
+    if [ -n "$rows" ]; then
+      args=( $@ )
+      args=("${args[@]}" "-rows" "$rows")
+      set -- "${args[@]}"
+    fi
+  fi
 else
   CLASS=$COMMAND
+fi
+
+# cygwin path translation
+if [ "$cygwin" = true ]; then
+  CLASSPATH=$(cygpath -p -w "$CLASSPATH" 2>/dev/null)
+  HADOOP_LOG_DIR=$(cygpath -w "$HADOOP_LOG_DIR" 2>/dev/null)
+  HADOOP_PREFIX=$(cygpath -w "$HADOOP_PREFIX" 2>/dev/null)
+  HADOOP_CONF_DIR=$(cygpath -w "$HADOOP_CONF_DIR" 2>/dev/null)
+  HADOOP_COMMON_HOME=$(cygpath -w "$HADOOP_COMMON_HOME" 2>/dev/null)
+  HADOOP_HDFS_HOME=$(cygpath -w "$HADOOP_HDFS_HOME" 2>/dev/null)
+  HADOOP_YARN_HOME=$(cygpath -w "$HADOOP_YARN_HOME" 2>/dev/null)
+  HADOOP_MAPRED_HOME=$(cygpath -w "$HADOOP_MAPRED_HOME" 2>/dev/null)
+  YARN_LOG_DIR=$(cygpath -w "$YARN_LOG_DIR" 2>/dev/null)
 fi
 
 YARN_OPTS="$YARN_OPTS -Dhadoop.log.dir=$YARN_LOG_DIR"
@@ -274,10 +365,21 @@ YARN_OPTS="$YARN_OPTS -Dyarn.log.dir=$YARN_LOG_DIR"
 YARN_OPTS="$YARN_OPTS -Dhadoop.log.file=$YARN_LOGFILE"
 YARN_OPTS="$YARN_OPTS -Dyarn.log.file=$YARN_LOGFILE"
 YARN_OPTS="$YARN_OPTS -Dyarn.home.dir=$HADOOP_YARN_HOME"
-YARN_OPTS="$YARN_OPTS -Dhadoop.home.dir=$HADOOP_YARN_HOME"
-YARN_OPTS="$YARN_OPTS -Dhadoop.root.logger=${YARN_ROOT_LOGGER:-INFO,console}"
-YARN_OPTS="$YARN_OPTS -Dyarn.root.logger=${YARN_ROOT_LOGGER:-INFO,console}"
+
+if [ "$cygwin" = true ]; then
+  HADOOP_HOME=$(cygpath -w "$HADOOP_PREFIX" 2>/dev/null)
+  YARN_OPTS="$YARN_OPTS -Dhadoop.home.dir=$HADOOP_HOME"
+  export HADOOP_HOME
+else
+  YARN_OPTS="$YARN_OPTS -Dhadoop.home.dir=$HADOOP_PREFIX"
+fi
+
+YARN_OPTS="$YARN_OPTS -Dhadoop.root.logger=${YARN_ROOT_LOGGER:-${HADOOP_LOGLEVEL},console}"
+YARN_OPTS="$YARN_OPTS -Dyarn.root.logger=${YARN_ROOT_LOGGER:-${HADOOP_LOGLEVEL},console}"
 if [ "x$JAVA_LIBRARY_PATH" != "x" ]; then
+  if [ "$cygwin" = true ]; then
+    JAVA_LIBRARY_PATH=$(cygpath -w "$JAVA_LIBRARY_PATH" 2>/dev/null)
+  fi
   YARN_OPTS="$YARN_OPTS -Djava.library.path=$JAVA_LIBRARY_PATH"
 fi  
 

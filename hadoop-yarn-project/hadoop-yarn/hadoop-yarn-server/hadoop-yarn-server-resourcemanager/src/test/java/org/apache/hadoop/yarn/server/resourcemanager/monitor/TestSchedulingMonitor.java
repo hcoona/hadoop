@@ -20,27 +20,35 @@ package org.apache.hadoop.yarn.server.resourcemanager.monitor;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
 import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager;
 import org.apache.hadoop.yarn.server.resourcemanager.monitor.capacity.ProportionalCapacityPreemptionPolicy;
 import org.junit.Test;
 
-import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 public class TestSchedulingMonitor {
 
   @Test(timeout = 10000)
-  public void testRMStarts() {
+  public void testRMStarts() throws Exception {
     Configuration conf = new YarnConfiguration();
     conf.setBoolean(YarnConfiguration.RM_SCHEDULER_ENABLE_MONITORS, true);
     conf.set(YarnConfiguration.RM_SCHEDULER_MONITOR_POLICIES,
         ProportionalCapacityPreemptionPolicy.class.getCanonicalName());
 
-    ResourceManager rm = new ResourceManager();
-    try {
-      rm.init(conf);
-    } catch (Exception e) {
-      fail("ResourceManager does not start when " +
-          YarnConfiguration.RM_SCHEDULER_ENABLE_MONITORS + " is set to true");
-    }
+    ResourceManager rm = new MockRM();
+    rm.init(conf);
+    SchedulingEditPolicy mPolicy = mock(SchedulingEditPolicy.class);
+    when(mPolicy.getMonitoringInterval()).thenReturn(1000L);
+    SchedulingMonitor monitor = new SchedulingMonitor(rm.getRMContext(),
+        mPolicy);
+    monitor.serviceInit(conf);
+    monitor.serviceStart();
+    verify(mPolicy, timeout(10000)).editSchedule();
+    monitor.close();
+    rm.close();
   }
 }

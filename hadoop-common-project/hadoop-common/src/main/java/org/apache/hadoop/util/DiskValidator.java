@@ -15,53 +15,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.util;
 
-import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
+import org.apache.hadoop.util.DiskChecker.DiskErrorException;
+
+import java.io.File;
 
 /**
- * FakeTimer can be used for test purposes to control the return values
- * from {{@link Timer}}.
+ * A interface for disk validators.
+ *
+ * The {@link #checkStatus(File)} operation checks status of a file/dir.
+ *
  */
 @InterfaceAudience.Private
 @InterfaceStability.Unstable
-public class FakeTimer extends Timer {
-  private long nowNanos;
-
-  /** Constructs a FakeTimer with a non-zero value */
-  public FakeTimer() {
-    // Initialize with a non-trivial value.
-    nowNanos = TimeUnit.MILLISECONDS.toNanos(1000);
-  }
-
-  @Override
-  public long now() {
-    return TimeUnit.NANOSECONDS.toMillis(nowNanos);
-  }
-
-  @Override
-  public long monotonicNow() {
-    return TimeUnit.NANOSECONDS.toMillis(nowNanos);
-  }
-
-  @Override
-  public long monotonicNowNanos() {
-    return nowNanos;
-  }
-
-  /** Increases the time by milliseconds */
-  public void advance(long advMillis) {
-    nowNanos += TimeUnit.MILLISECONDS.toNanos(advMillis);
-  }
-
+public interface DiskValidator {
   /**
-   * Increases the time by nanoseconds.
-   * @param advNanos Nanoseconds to advance by.
+   * Check the status of a file/dir.
+   * @param dir a file/dir
+   * @throws DiskErrorException if any disk error
    */
-  public void advanceNanos(long advNanos) {
-    nowNanos += advNanos;
-  }
+  void checkStatus(File dir) throws DiskErrorException;
 }

@@ -286,4 +286,25 @@ public class CommonConfigurationKeys extends CommonConfigurationKeysPublic {
   public static final String NFS_EXPORTS_ALLOWED_HOSTS_SEPARATOR = ";";
   public static final String NFS_EXPORTS_ALLOWED_HOSTS_KEY = "nfs.exports.allowed.hosts";
   public static final String NFS_EXPORTS_ALLOWED_HOSTS_KEY_DEFAULT = "* rw";
+
+  // Global ZooKeeper configuration keys
+  public static final String ZK_PREFIX = "hadoop.zk.";
+  /** ACL for the ZooKeeper ensemble. */
+  public static final String ZK_ACL = ZK_PREFIX + "acl";
+  public static final String ZK_ACL_DEFAULT = "world:anyone:rwcda";
+  /** Authentication for the ZooKeeper ensemble. */
+  public static final String ZK_AUTH = ZK_PREFIX + "auth";
+
+  /** Address of the ZooKeeper ensemble. */
+  public static final String ZK_ADDRESS = ZK_PREFIX + "address";
+  /** Maximum number of retries for a ZooKeeper operation. */
+  public static final String ZK_NUM_RETRIES = ZK_PREFIX + "num-retries";
+  public static final int    ZK_NUM_RETRIES_DEFAULT = 1000;
+  /** Timeout for a ZooKeeper operation in ZooKeeper in milliseconds. */
+  public static final String ZK_TIMEOUT_MS = ZK_PREFIX + "timeout-ms";
+  public static final int    ZK_TIMEOUT_MS_DEFAULT = 10000;
+  /** How often to retry a ZooKeeper operation  in milliseconds. */
+  public static final String ZK_RETRY_INTERVAL_MS =
+      ZK_PREFIX + "retry-interval-ms";
+  public static final int    ZK_RETRY_INTERVAL_MS_DEFAULT = 1000;
 }

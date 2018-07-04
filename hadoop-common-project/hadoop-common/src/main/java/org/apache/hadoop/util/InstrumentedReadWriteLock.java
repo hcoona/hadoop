@@ -15,53 +15,44 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.util;
 
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
+import org.slf4j.Logger;
 
 /**
- * FakeTimer can be used for test purposes to control the return values
- * from {{@link Timer}}.
+ * This is a wrap class of a {@link ReentrantReadWriteLock}.
+ * It implements the interface {@link ReadWriteLock}, and can be used to
+ * create instrumented <tt>ReadLock</tt> and <tt>WriteLock</tt>.
  */
 @InterfaceAudience.Private
 @InterfaceStability.Unstable
-public class FakeTimer extends Timer {
-  private long nowNanos;
+public class InstrumentedReadWriteLock implements ReadWriteLock {
 
-  /** Constructs a FakeTimer with a non-zero value */
-  public FakeTimer() {
-    // Initialize with a non-trivial value.
-    nowNanos = TimeUnit.MILLISECONDS.toNanos(1000);
+  private final Lock readLock;
+  private final Lock writeLock;
+
+  InstrumentedReadWriteLock(boolean fair, String name, Logger logger,
+      long minLoggingGapMs, long lockWarningThresholdMs) {
+    ReentrantReadWriteLock readWriteLock = new ReentrantReadWriteLock(fair);
+    readLock = new InstrumentedReadLock(name, logger, readWriteLock,
+        minLoggingGapMs, lockWarningThresholdMs);
+    writeLock = new InstrumentedWriteLock(name, logger, readWriteLock,
+        minLoggingGapMs, lockWarningThresholdMs);
   }
 
   @Override
-  public long now() {
-    return TimeUnit.NANOSECONDS.toMillis(nowNanos);
+  public Lock readLock() {
+    return readLock;
   }
 
   @Override
-  public long monotonicNow() {
-    return TimeUnit.NANOSECONDS.toMillis(nowNanos);
-  }
-
-  @Override
-  public long monotonicNowNanos() {
-    return nowNanos;
-  }
-
-  /** Increases the time by milliseconds */
-  public void advance(long advMillis) {
-    nowNanos += TimeUnit.MILLISECONDS.toNanos(advMillis);
-  }
-
-  /**
-   * Increases the time by nanoseconds.
-   * @param advNanos Nanoseconds to advance by.
-   */
-  public void advanceNanos(long advNanos) {
-    nowNanos += advNanos;
+  public Lock writeLock() {
+    return writeLock;
   }
 }

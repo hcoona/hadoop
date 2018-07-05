@@ -389,6 +389,11 @@ public class DataNode extends ReconfigurableBase
     this.getHdfsBlockLocationsEnabled = false;
   }
 
+  @Override  // ReconfigurableBase
+  protected Configuration getNewConf() {
+    return new HdfsConfiguration();
+  }
+
   /**
    * Create the DataNode given a configuration, an array of dataDirs,
    * and a namenode proxy
@@ -452,12 +457,13 @@ public class DataNode extends ReconfigurableBase
   }
 
   @Override
-  public void reconfigurePropertyImpl(String property, String newVal)
+  public String reconfigurePropertyImpl(String property, String newVal)
       throws ReconfigurationException {
     if (property.equals(DFS_DATANODE_DATA_DIR_KEY)) {
       try {
         LOG.info("Reconfiguring " + property + " to " + newVal);
         this.refreshVolumes(newVal);
+        return getConf().get(DFS_DATANODE_DATA_DIR_KEY);
       } catch (Exception e) {
         throw new ReconfigurationException(property, newVal,
             getConf().get(property), e);
@@ -657,7 +663,8 @@ public class DataNode extends ReconfigurableBase
       } else {
         // The http socket is created externally using JSVC, we add it in
         // directly.
-        builder.setConnector(secureResources.getListener());
+        // TODO: jetty compatibility
+        //builder.setConnector(secureResources.getListener());
       }
     }
 
@@ -1085,7 +1092,7 @@ public class DataNode extends ReconfigurableBase
     registerMXBean();
     initDataXceiver(conf);
     startInfoServer(conf);
-    pauseMonitor = new JvmPauseMonitor(conf);
+    pauseMonitor = new JvmPauseMonitor();
     pauseMonitor.start();
   
     // BlockPoolTokenSecretManager is required to create ipc server.

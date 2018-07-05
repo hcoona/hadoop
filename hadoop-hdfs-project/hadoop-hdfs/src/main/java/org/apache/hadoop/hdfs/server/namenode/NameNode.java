@@ -619,7 +619,7 @@ public class NameNode implements NameNodeStatusMXBean {
       httpServer.setFSImage(getFSImage());
     }
     
-    pauseMonitor = new JvmPauseMonitor(conf);
+    pauseMonitor = new JvmPauseMonitor();
     pauseMonitor.start();
     metrics.getJvmMetrics().setPauseMonitor(pauseMonitor);
     

@@ -1118,7 +1118,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
-          <version>2.5.1</version>
+          <version>3.1</version>
           <configuration>
             <source>${javac.version}</source>
             <target>${javac.version}</target>
@@ -1301,6 +1301,8 @@
           </environmentVariables>
           <systemPropertyVariables>
 
+            <hadoop.log.dir>${project.build.directory}/log</hadoop.log.dir>
+            <hadoop.tmp.dir>${project.build.directory}/tmp</hadoop.tmp.dir>
 
             <!-- TODO: all references in testcases should be updated to this default -->
             <test.build.dir>${test.build.dir}</test.build.dir>

@@ -21,6 +21,10 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -33,6 +37,7 @@ import org.apache.hadoop.io.compress.CompressionInputStream;
 import org.apache.hadoop.io.compress.CompressionOutputStream;
 import org.apache.hadoop.io.compress.Compressor;
 import org.apache.hadoop.io.compress.Decompressor;
+import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.hadoop.util.Progressable;
 import org.junit.Assert;
 import org.junit.Before;
@@ -44,9 +49,8 @@ import static org.mockito.Mockito.*;
 
 public class TestMapFile {
   
-  private static final Path TEST_DIR = new Path(
-      System.getProperty("test.build.data", "/tmp"),
-      TestMapFile.class.getSimpleName());
+  private static final Path TEST_DIR = new Path(GenericTestUtils.getTempPath(
+      TestMapFile.class.getSimpleName()));
   
   private static Configuration conf = new Configuration();
 
@@ -481,6 +485,63 @@ public class TestMapFile {
       IOUtils.cleanup(null, writer);
     }
   }
+
+  /**
+   * test {@link MapFile#fix(FileSystem, Path, Class<? extends Writable>,
+   *                         Class<? extends Writable>, boolean, Configuration)}
+   * method in case of BLOCK compression
+   */
+  @Test
+  public void testFixBlockCompress() throws Exception {
+    final String indexLessMapFile = "testFixBlockCompress.mapfile";
+    final int compressBlocksize = 100;
+    final int indexInterval = 4;
+    final int noBlocks = 4;
+    final String value = "value-";
+    final int size = noBlocks * compressBlocksize / (4 + value.length());
+
+    conf.setInt("io.seqfile.compress.blocksize", compressBlocksize);
+    MapFile.Writer.setIndexInterval(conf, indexInterval);
+    FileSystem fs = FileSystem.getLocal(conf);
+    Path dir = new Path(TEST_DIR, indexLessMapFile);
+    MapFile.Writer writer = null;
+    MapFile.Reader reader = null;
+    try {
+      writer =
+          new MapFile.Writer(conf, dir,
+          MapFile.Writer.keyClass(IntWritable.class),
+          MapFile.Writer.valueClass(Text.class),
+          MapFile.Writer.compression(CompressionType.BLOCK));
+      for (int i = 0; i < size; i++) {
+        writer.append(new IntWritable(i), new Text(value + i));
+      }
+      writer.close();
+      Path index = new Path(dir, MapFile.INDEX_FILE_NAME);
+      fs.rename(index, index.suffix(".orig"));
+
+      assertEquals("No of valid MapFile entries wrong", size,
+                   MapFile.fix(fs, dir, IntWritable.class, Text.class,
+                               false, conf));
+      reader = new MapFile.Reader(dir, conf);
+      IntWritable key;
+      Text val = new Text();
+      int notFound = 0;
+      for (int i = 0; i < size; i++) {
+        key = new IntWritable(i);
+        if (null == reader.get(key, val)) {
+          notFound++;
+        }
+      }
+      assertEquals("With MapFile.fix-ed index, could not get entries # ",
+                   0, notFound);
+    } finally {
+      IOUtils.cleanupWithLogger(null, writer, reader);
+      if (fs.exists(dir)) {
+        fs.delete(dir, true);
+      }
+    }
+  }
+
   /**
    * test all available constructor for {@code MapFile.Writer}
    */
@@ -602,10 +663,9 @@ public class TestMapFile {
 
   @Test
   public void testMainMethodMapFile() {
-    String path = new Path(TEST_DIR, "mainMethodMapFile.mapfile").toString();
     String inFile = "mainMethodMapFile.mapfile";
-    String outFile = "mainMethodMapFile.mapfile";
-    String[] args = { path, outFile };
+    String path = new Path(TEST_DIR, inFile).toString();
+    String[] args = { path, path };
     MapFile.Writer writer = null;
     try {
       writer = createWriter(inFile, IntWritable.class, Text.class);
@@ -616,7 +676,7 @@ public class TestMapFile {
     } catch (Exception ex) {
       fail("testMainMethodMapFile error !!!");
     } finally {
-      IOUtils.cleanup(null, writer);
+      IOUtils.cleanupWithLogger(null, writer);
     }
   }
 
@@ -729,6 +789,58 @@ public class TestMapFile {
       assertEquals(null, reader.midKey()); 
     } finally {
       reader.close();
+    }
+  }
+
+  @Test
+  public void testMerge() throws Exception {
+    final String TEST_METHOD_KEY = "testMerge.mapfile";
+    int SIZE = 10;
+    int ITERATIONS = 5;
+    Path[] in = new Path[5];
+    List<Integer> expected = new ArrayList<Integer>();
+    for (int j = 0; j < 5; j++) {
+      try (MapFile.Writer writer = createWriter(TEST_METHOD_KEY + "." + j,
+          IntWritable.class, Text.class)) {
+        in[j] = new Path(TEST_DIR, TEST_METHOD_KEY + "." + j);
+        for (int i = 0; i < SIZE; i++) {
+          expected.add(i + j);
+          writer.append(new IntWritable(i + j), new Text("Value:" + (i + j)));
+        }
+      }
+    }
+    // Sort expected values
+    Collections.sort(expected);
+    // Merge all 5 files
+    MapFile.Merger merger = new MapFile.Merger(conf);
+    merger.merge(in, true, new Path(TEST_DIR, TEST_METHOD_KEY));
+
+    try (MapFile.Reader reader = createReader(TEST_METHOD_KEY,
+        IntWritable.class)) {
+      int start = 0;
+      // test iteration
+      Text startValue = new Text("Value:" + start);
+      int i = 0;
+      while (i++ < ITERATIONS) {
+        Iterator<Integer> expectedIterator = expected.iterator();
+        IntWritable key = new IntWritable(start);
+        Text value = startValue;
+        IntWritable prev = new IntWritable(start);
+        while (reader.next(key, value)) {
+          assertTrue("Next key should be always equal or more",
+              prev.get() <= key.get());
+          assertEquals(expectedIterator.next().intValue(), key.get());
+          prev.set(key.get());
+        }
+        reader.reset();
+      }
+    }
+
+    // inputs should be deleted
+    for (int j = 0; j < in.length; j++) {
+      Path path = in[j];
+      assertFalse("inputs should be deleted",
+          path.getFileSystem(conf).exists(path));
     }
   }
 }

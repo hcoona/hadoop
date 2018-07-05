@@ -16,6 +16,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 -->
+
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -60,9 +61,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\org\apache\hadoop\security\JniBasedUnixGroupsMappingWin.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\org\apache\hadoop\yarn\server\nodemanager\windows_secure_container_executor.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

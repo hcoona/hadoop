@@ -37,6 +37,9 @@ public abstract class SysInfo {
     if (Shell.LINUX) {
       return new SysInfoLinux();
     }
+    if (Shell.WINDOWS) {
+      return new SysInfoWindows();
+    }
     throw new UnsupportedOperationException("Could not determine OS");
   }
 

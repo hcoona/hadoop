@@ -24,14 +24,21 @@ import static org.junit.Assert.fail;
 import java.io.ByteArrayInputStream;
 import java.io.EOFException;
 import java.io.File;
+import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.hadoop.test.GenericTestUtils;
+import org.junit.Assert;
 import org.junit.Test;
 import org.mockito.Mockito;
 
@@ -67,6 +74,36 @@ public class TestIOUtils {
   }
 
   @Test
+  public void testCopyBytesShouldCloseInputSteamWhenOutputStreamCloseThrowsRunTimeException()
+      throws Exception {
+    InputStream inputStream = Mockito.mock(InputStream.class);
+    OutputStream outputStream = Mockito.mock(OutputStream.class);
+    Mockito.doReturn(-1).when(inputStream).read(new byte[1]);
+    Mockito.doThrow(new RuntimeException()).when(outputStream).close();
+    try {
+      IOUtils.copyBytes(inputStream, outputStream, 1, true);
+      fail("Didn't throw exception");
+    } catch (RuntimeException e) {
+    }
+    Mockito.verify(outputStream, Mockito.atLeastOnce()).close();
+  }
+
+  @Test
+  public void testCopyBytesShouldCloseInputSteamWhenInputStreamCloseThrowsRunTimeException()
+      throws Exception {
+    InputStream inputStream = Mockito.mock(InputStream.class);
+    OutputStream outputStream = Mockito.mock(OutputStream.class);
+    Mockito.doReturn(-1).when(inputStream).read(new byte[1]);
+    Mockito.doThrow(new RuntimeException()).when(inputStream).close();
+    try {
+      IOUtils.copyBytes(inputStream, outputStream, 1, true);
+      fail("Didn't throw exception");
+    } catch (RuntimeException e) {
+    }
+    Mockito.verify(inputStream, Mockito.atLeastOnce()).close();
+  }
+
+  @Test
   public void testCopyBytesShouldNotCloseStreamsWhenCloseIsFalse()
       throws Exception {
     InputStream inputStream = Mockito.mock(InputStream.class);
@@ -76,7 +113,7 @@ public class TestIOUtils {
     Mockito.verify(inputStream, Mockito.atMost(0)).close();
     Mockito.verify(outputStream, Mockito.atMost(0)).close();
   }
-  
+
   @Test
   public void testCopyBytesWithCountShouldCloseStreamsWhenCloseIsTrue()
       throws Exception {
@@ -117,7 +154,7 @@ public class TestIOUtils {
     Mockito.verify(inputStream, Mockito.atLeastOnce()).close();
     Mockito.verify(outputStream, Mockito.atLeastOnce()).close();
   }
-  
+
   @Test
   public void testWriteFully() throws IOException {
     final int INPUT_BUFFER_LEN = 10000;
@@ -148,6 +185,7 @@ public class TestIOUtils {
       for (int i = HALFWAY; i < input.length; i++) {
         assertEquals(input[i - HALFWAY], output[i]);
       }
+      raf.close();
     } finally {
       File f = new File(TEST_FILE_NAME);
       if (f.exists()) {
@@ -177,7 +215,7 @@ public class TestIOUtils {
           "Error while reading compressed data", ioe);
     }
   }
-  
+
   @Test
   public void testSkipFully() throws IOException {
     byte inArray[] = new byte[] {0, 1, 2, 3, 4};
@@ -212,6 +250,43 @@ public class TestIOUtils {
       }
     } finally {
       in.close();
+    }
+  }
+
+  private static enum NoEntry3Filter implements FilenameFilter {
+    INSTANCE;
+
+    @Override
+    public boolean accept(File dir, String name) {
+      return !name.equals("entry3");
+    }
+  }
+
+  @Test
+  public void testListDirectory() throws IOException {
+    File dir = new File("testListDirectory");
+    Files.createDirectory(dir.toPath());
+    try {
+      Set<String> entries = new HashSet<String>();
+      entries.add("entry1");
+      entries.add("entry2");
+      entries.add("entry3");
+      for (String entry : entries) {
+        Files.createDirectory(new File(dir, entry).toPath());
+      }
+      List<String> list = IOUtils.listDirectory(dir,
+          NoEntry3Filter.INSTANCE);
+      for (String entry : list) {
+        Assert.assertTrue(entries.remove(entry));
+      }
+      Assert.assertTrue(entries.contains("entry3"));
+      list = IOUtils.listDirectory(dir, null);
+      for (String entry : list) {
+        entries.remove(entry);
+      }
+      Assert.assertTrue(entries.isEmpty());
+    } finally {
+      FileUtils.deleteDirectory(dir);
     }
   }
 }

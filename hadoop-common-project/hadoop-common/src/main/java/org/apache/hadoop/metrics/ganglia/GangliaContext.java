@@ -1,6 +1,4 @@
-/*
- * GangliaContext.java
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,16 +19,12 @@
 package org.apache.hadoop.metrics.ganglia;
 
 import java.io.IOException;
-import java.net.DatagramPacket;
-import java.net.DatagramSocket;
-import java.net.SocketAddress;
-import java.net.SocketException;
+import java.net.*;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.commons.io.Charsets;
 
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
@@ -38,11 +32,16 @@ import org.apache.hadoop.metrics.ContextFactory;
 import org.apache.hadoop.metrics.spi.AbstractMetricsContext;
 import org.apache.hadoop.metrics.spi.OutputRecord;
 import org.apache.hadoop.metrics.spi.Util;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Context for sending metrics to Ganglia.
- * 
+ *
+ * @deprecated Use {@link org.apache.hadoop.metrics2.sink.ganglia.GangliaSink30}
+ * instead.
  */
+@Deprecated
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
 public class GangliaContext extends AbstractMetricsContext {
@@ -53,15 +52,18 @@ public class GangliaContext extends AbstractMetricsContext {
   private static final String SLOPE_PROPERTY = "slope";
   private static final String TMAX_PROPERTY = "tmax";
   private static final String DMAX_PROPERTY = "dmax";
-    
+  private static final String MULTICAST_PROPERTY = "multicast";
+  private static final String MULTICAST_TTL_PROPERTY = "multicast.ttl";
+
   private static final String DEFAULT_UNITS = "";
   private static final String DEFAULT_SLOPE = "both";
   private static final int DEFAULT_TMAX = 60;
   private static final int DEFAULT_DMAX = 0;
   private static final int DEFAULT_PORT = 8649;
   private static final int BUFFER_SIZE = 1500;       // as per libgmond.c
+  private static final int DEFAULT_MULTICAST_TTL = 1;
 
-  private final Log LOG = LogFactory.getLog(this.getClass());    
+  private final Logger LOG = LoggerFactory.getLogger(this.getClass());
 
   private static final Map<Class,String> typeTable = new HashMap<Class,String>(5);
     
@@ -82,6 +84,8 @@ public class GangliaContext extends AbstractMetricsContext {
   private Map<String,String> slopeTable;
   private Map<String,String> tmaxTable;
   private Map<String,String> dmaxTable;
+  private boolean multicastEnabled;
+  private int multicastTtl;
     
   protected DatagramSocket datagramSocket;
     
@@ -90,6 +94,7 @@ public class GangliaContext extends AbstractMetricsContext {
   public GangliaContext() {
   }
     
+  @Override
   @InterfaceAudience.Private
   public void init(String contextName, ContextFactory factory) {
     super.init(contextName, factory);
@@ -102,12 +107,26 @@ public class GangliaContext extends AbstractMetricsContext {
     slopeTable = getAttributeTable(SLOPE_PROPERTY);
     tmaxTable  = getAttributeTable(TMAX_PROPERTY);
     dmaxTable  = getAttributeTable(DMAX_PROPERTY);
+    multicastEnabled = Boolean.parseBoolean(getAttribute(MULTICAST_PROPERTY));
+    String multicastTtlValue = getAttribute(MULTICAST_TTL_PROPERTY);
+    if (multicastEnabled) {
+      if (multicastTtlValue == null) {
+        multicastTtl = DEFAULT_MULTICAST_TTL;
+      } else {
+        multicastTtl = Integer.parseInt(multicastTtlValue);
+      }
+    }
         
     try {
-      datagramSocket = new DatagramSocket();
-    }
-    catch (SocketException se) {
-      se.printStackTrace();
+      if (multicastEnabled) {
+        LOG.info("Enabling multicast for Ganglia with TTL " + multicastTtl);
+        datagramSocket = new MulticastSocket();
+        ((MulticastSocket) datagramSocket).setTimeToLive(multicastTtl);
+      } else {
+        datagramSocket = new DatagramSocket();
+      }
+    } catch (IOException e) {
+      LOG.error(e.toString());
     }
   }
 
@@ -122,6 +141,7 @@ public class GangliaContext extends AbstractMetricsContext {
     }
   }
   
+  @Override
   @InterfaceAudience.Private
   public void emitRecord(String contextName, String recordName,
     OutputRecord outRec) 
@@ -224,7 +244,7 @@ public class GangliaContext extends AbstractMetricsContext {
    * a multiple of 4.
    */
   protected void xdr_string(String s) {
-    byte[] bytes = s.getBytes();
+    byte[] bytes = s.getBytes(Charsets.UTF_8);
     int len = bytes.length;
     xdr_int(len);
     System.arraycopy(bytes, 0, buffer, offset, len);

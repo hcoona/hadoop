@@ -18,6 +18,7 @@
 package org.apache.hadoop.nfs.nfs3.request;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 import org.apache.hadoop.nfs.NfsFileType;
 import org.apache.hadoop.nfs.nfs3.FileHandle;
@@ -79,7 +80,7 @@ public class MKNOD3Request extends RequestWithHandle {
   public void serialize(XDR xdr) {
     handle.serialize(xdr);
     xdr.writeInt(name.length());
-    xdr.writeFixedOpaque(name.getBytes(), name.length());
+    xdr.writeFixedOpaque(name.getBytes(StandardCharsets.UTF_8), name.length());
     objAttr.serialize(xdr);
     if (spec != null) {
       xdr.writeInt(spec.getSpecdata1());

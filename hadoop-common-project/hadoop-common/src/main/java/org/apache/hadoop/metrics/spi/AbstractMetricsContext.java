@@ -1,6 +1,4 @@
-/*
- * AbstractMetricsContext.java
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -51,7 +49,10 @@ import org.apache.hadoop.metrics.Updater;
  * on which data is to be sent to the metrics system.  Subclasses must
  * override the abstract <code>emitRecord</code> method in order to transmit
  * the data. <p/>
+ *
+ * @deprecated Use org.apache.hadoop.metrics2 package instead.
  */
+@Deprecated
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
 public abstract class AbstractMetricsContext implements MetricsContext {
@@ -310,13 +311,13 @@ public abstract class AbstractMetricsContext implements MetricsContext {
    *  Emits the records.
    */
   private synchronized void emitRecords() throws IOException {
-    for (String recordName : bufferedData.keySet()) {
-      RecordMap recordMap = bufferedData.get(recordName);
+    for (Map.Entry<String,RecordMap> recordEntry : bufferedData.entrySet()) {
+      RecordMap recordMap = recordEntry.getValue();
       synchronized (recordMap) {
         Set<Entry<TagMap, MetricMap>> entrySet = recordMap.entrySet ();
         for (Entry<TagMap, MetricMap> entry : entrySet) {
           OutputRecord outRec = new OutputRecord(entry.getKey(), entry.getValue());
-          emitRecord(contextName, recordName, outRec);
+          emitRecord(contextName, recordEntry.getKey(), outRec);
         }
       }
     }
@@ -330,8 +331,8 @@ public abstract class AbstractMetricsContext implements MetricsContext {
    */
   public synchronized Map<String, Collection<OutputRecord>> getAllRecords() {
     Map<String, Collection<OutputRecord>> out = new TreeMap<String, Collection<OutputRecord>>();
-    for (String recordName : bufferedData.keySet()) {
-      RecordMap recordMap = bufferedData.get(recordName);
+    for (Map.Entry<String,RecordMap> recordEntry : bufferedData.entrySet()) {
+      RecordMap recordMap = recordEntry.getValue();
       synchronized (recordMap) {
         List<OutputRecord> records = new ArrayList<OutputRecord>();
         Set<Entry<TagMap, MetricMap>> entrySet = recordMap.entrySet();
@@ -339,7 +340,7 @@ public abstract class AbstractMetricsContext implements MetricsContext {
           OutputRecord outRec = new OutputRecord(entry.getKey(), entry.getValue());
           records.add(outRec);
         }
-        out.put(recordName, records);
+        out.put(recordEntry.getKey(), records);
       }
     }
     return out;

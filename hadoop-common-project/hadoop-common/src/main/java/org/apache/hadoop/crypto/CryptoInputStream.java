@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.crypto;
 
+import java.io.EOFException;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.FilterInputStream;
@@ -29,19 +30,23 @@ import java.util.EnumSet;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+import com.google.common.base.Preconditions;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.fs.ByteBufferReadable;
 import org.apache.hadoop.fs.CanSetDropBehind;
 import org.apache.hadoop.fs.CanSetReadahead;
+import org.apache.hadoop.fs.CanUnbuffer;
+import org.apache.hadoop.fs.FSExceptionMessages;
 import org.apache.hadoop.fs.HasEnhancedByteBufferAccess;
 import org.apache.hadoop.fs.HasFileDescriptor;
 import org.apache.hadoop.fs.PositionedReadable;
 import org.apache.hadoop.fs.ReadOption;
 import org.apache.hadoop.fs.Seekable;
+import org.apache.hadoop.fs.StreamCapabilities;
+import org.apache.hadoop.fs.StreamCapabilitiesPolicy;
 import org.apache.hadoop.io.ByteBufferPool;
-
-import com.google.common.base.Preconditions;
+import org.apache.hadoop.util.StringUtils;
 
 /**
  * CryptoInputStream decrypts data. It is not thread-safe. AES CTR mode is
@@ -59,8 +64,8 @@ import com.google.common.base.Preconditions;
 public class CryptoInputStream extends FilterInputStream implements 
     Seekable, PositionedReadable, ByteBufferReadable, HasFileDescriptor, 
     CanSetDropBehind, CanSetReadahead, HasEnhancedByteBufferAccess, 
-    ReadableByteChannel {
-  private static final byte[] oneByteBuf = new byte[1];
+    ReadableByteChannel, CanUnbuffer, StreamCapabilities {
+  private final byte[] oneByteBuf = new byte[1];
   private final CryptoCodec codec;
   private final Decryptor decryptor;
   private final int bufferSize;
@@ -113,6 +118,7 @@ public class CryptoInputStream extends FilterInputStream implements
   public CryptoInputStream(InputStream in, CryptoCodec codec,
       int bufferSize, byte[] key, byte[] iv, long streamOffset) throws IOException {
     super(in);
+    CryptoStreamUtils.checkCodec(codec);
     this.bufferSize = CryptoStreamUtils.checkBufferSize(codec, bufferSize);
     this.codec = codec;
     this.key = key.clone();
@@ -312,6 +318,7 @@ public class CryptoInputStream extends FilterInputStream implements
     
     super.close();
     freeBuffers();
+    codec.close();
     closed = true;
   }
   
@@ -394,7 +401,9 @@ public class CryptoInputStream extends FilterInputStream implements
   /** Seek to a position. */
   @Override
   public void seek(long pos) throws IOException {
-    Preconditions.checkArgument(pos >= 0, "Cannot seek to negative offset.");
+    if (pos < 0) {
+      throw new EOFException(FSExceptionMessages.NEGATIVE_SEEK);
+    }
     checkStream();
     try {
       /*
@@ -712,5 +721,28 @@ public class CryptoInputStream extends FilterInputStream implements
   @Override
   public boolean isOpen() {
     return !closed;
+  }
+
+  private void cleanDecryptorPool() {
+    decryptorPool.clear();
+  }
+
+  @Override
+  public void unbuffer() {
+    cleanBufferPool();
+    cleanDecryptorPool();
+    StreamCapabilitiesPolicy.unbuffer(in);
+  }
+
+  @Override
+  public boolean hasCapability(String capability) {
+    switch (StringUtils.toLowerCase(capability)) {
+    case StreamCapabilities.READAHEAD:
+    case StreamCapabilities.DROPBEHIND:
+    case StreamCapabilities.UNBUFFER:
+      return true;
+    default:
+      return false;
+    }
   }
 }

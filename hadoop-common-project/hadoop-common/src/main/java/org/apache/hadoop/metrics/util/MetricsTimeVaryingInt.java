@@ -19,8 +19,8 @@ package org.apache.hadoop.metrics.util;
 
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.metrics.MetricsRecord;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The MetricsTimeVaryingInt class is for a metric that naturally
@@ -31,13 +31,14 @@ import org.apache.commons.logging.LogFactory;
  * 
  * Note if one wants a time associated with the metric then use
  * @see org.apache.hadoop.metrics.util.MetricsTimeVaryingRate
- *
+ * @deprecated Use org.apache.hadoop.metrics2 package instead.
  */
+@Deprecated
 @InterfaceAudience.LimitedPrivate({"HDFS", "MapReduce"})
 public class MetricsTimeVaryingInt extends MetricsBase {
 
-  private static final Log LOG =
-    LogFactory.getLog("org.apache.hadoop.metrics.util");
+  private static final Logger LOG =
+      LoggerFactory.getLogger("org.apache.hadoop.metrics.util");
   
   private int currentValue;
   private int previousIntervalValue;

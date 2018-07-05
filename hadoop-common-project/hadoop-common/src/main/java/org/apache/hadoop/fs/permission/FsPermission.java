@@ -21,8 +21,6 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
@@ -30,6 +28,8 @@ import org.apache.hadoop.fs.CommonConfigurationKeys;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A class for file/directory permissions.
@@ -37,7 +37,7 @@ import org.apache.hadoop.io.WritableFactory;
 @InterfaceAudience.Public
 @InterfaceStability.Stable
 public class FsPermission implements Writable {
-  private static final Log LOG = LogFactory.getLog(FsPermission.class);
+  private static final Logger LOG = LoggerFactory.getLogger(FsPermission.class);
 
   static final WritableFactory FACTORY = new WritableFactory() {
     @Override
@@ -103,7 +103,7 @@ public class FsPermission implements Writable {
    * @throws IllegalArgumentException if <code>mode</code> is invalid
    */
   public FsPermission(String mode) {
-    this(new UmaskParser(mode).getUMask());
+    this(new RawParser(mode).getPermission());
   }
 
   /** Return user {@link FsAction}. */
@@ -167,6 +167,18 @@ public class FsPermission implements Writable {
    */
   public short toExtendedShort() {
     return toShort();
+  }
+
+  /**
+   * Returns the FsPermission in an octal format.
+   *
+   * @return short Unlike {@link #toShort()} which provides a binary
+   * representation, this method returns the standard octal style permission.
+   */
+  public short toOctal() {
+    int n = this.toShort();
+    int octal = (n>>>9&1)*1000 + (n>>>6&7)*100 + (n>>>3&7)*10 + (n&7);
+    return (short)octal;
   }
 
   @Override
@@ -375,13 +387,10 @@ public class FsPermission implements Writable {
     public ImmutableFsPermission(short permission) {
       super(permission);
     }
-    @Override
-    public FsPermission applyUMask(FsPermission umask) {
-      throw new UnsupportedOperationException();
-    }
+
     @Override
     public void readFields(DataInput in) throws IOException {
       throw new UnsupportedOperationException();
-    }    
+    }
   }
 }

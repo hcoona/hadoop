@@ -19,7 +19,6 @@
 package org.apache.hadoop.util;
 
 import java.io.File;
-import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
@@ -30,10 +29,12 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Public;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
+import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.fs.Path;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A {@link URLClassLoader} for application isolation. Classes from the
@@ -55,22 +56,12 @@ public class ApplicationClassLoader extends URLClassLoader {
   private static final String SYSTEM_CLASSES_DEFAULT_KEY =
       "system.classes.default";
 
-  private static final Log LOG =
-    LogFactory.getLog(ApplicationClassLoader.class.getName());
-
-  private static final FilenameFilter JAR_FILENAME_FILTER =
-    new FilenameFilter() {
-      @Override
-      public boolean accept(File dir, String name) {
-        return name.endsWith(".jar") || name.endsWith(".JAR");
-      }
-  };
+  private static final Logger LOG =
+      LoggerFactory.getLogger(ApplicationClassLoader.class.getName());
 
   static {
-    InputStream is = null;
-    try {
-      is = ApplicationClassLoader.class.getClassLoader().
-          getResourceAsStream(PROPERTIES_FILE);
+    try (InputStream is = ApplicationClassLoader.class.getClassLoader()
+        .getResourceAsStream(PROPERTIES_FILE);) {
       if (is == null) {
         throw new ExceptionInInitializerError("properties file " +
             PROPERTIES_FILE + " is not found");
@@ -96,10 +87,6 @@ public class ApplicationClassLoader extends URLClassLoader {
   public ApplicationClassLoader(URL[] urls, ClassLoader parent,
       List<String> systemClasses) {
     super(urls, parent);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("urls: " + Arrays.toString(urls));
-      LOG.debug("system classes: " + systemClasses);
-    }
     this.parent = parent;
     if (parent == null) {
       throw new IllegalArgumentException("No parent classloader!");
@@ -108,6 +95,7 @@ public class ApplicationClassLoader extends URLClassLoader {
     this.systemClasses = (systemClasses == null || systemClasses.isEmpty()) ?
         Arrays.asList(StringUtils.getTrimmedStrings(SYSTEM_CLASSES_DEFAULT)) :
         systemClasses;
+    LOG.info("classpath: " + Arrays.toString(urls));
     LOG.info("system classes: " + this.systemClasses);
   }
 
@@ -121,11 +109,10 @@ public class ApplicationClassLoader extends URLClassLoader {
     List<URL> urls = new ArrayList<URL>();
     for (String element : classpath.split(File.pathSeparator)) {
       if (element.endsWith("/*")) {
-        String dir = element.substring(0, element.length() - 1);
-        File[] files = new File(dir).listFiles(JAR_FILENAME_FILTER);
-        if (files != null) {
-          for (File file : files) {
-            urls.add(file.toURI().toURL());
+        List<Path> jars = FileUtil.getJarsInDirectory(element);
+        if (!jars.isEmpty()) {
+          for (Path jar: jars) {
+            urls.add(jar.toUri().toURL());
           }
         }
       } else {
@@ -192,7 +179,7 @@ public class ApplicationClassLoader extends URLClassLoader {
         }
       } catch (ClassNotFoundException e) {
         if (LOG.isDebugEnabled()) {
-          LOG.debug(e);
+          LOG.debug(e.toString());
         }
         ex = e;
       }
@@ -216,25 +203,43 @@ public class ApplicationClassLoader extends URLClassLoader {
     return c;
   }
 
+  /**
+   * Checks if a class should be included as a system class.
+   *
+   * A class is a system class if and only if it matches one of the positive
+   * patterns and none of the negative ones.
+   *
+   * @param name the class name to check
+   * @param systemClasses a list of system class configurations.
+   * @return true if the class is a system class
+   */
   public static boolean isSystemClass(String name, List<String> systemClasses) {
+    boolean result = false;
     if (systemClasses != null) {
       String canonicalName = name.replace('/', '.');
       while (canonicalName.startsWith(".")) {
         canonicalName=canonicalName.substring(1);
       }
       for (String c : systemClasses) {
-        boolean result = true;
+        boolean shouldInclude = true;
         if (c.startsWith("-")) {
           c = c.substring(1);
-          result = false;
+          shouldInclude = false;
         }
-        if (c.endsWith(".") && canonicalName.startsWith(c)) {
-          return result;
-        } else if (canonicalName.equals(c)) {
-          return result;
+        if (canonicalName.startsWith(c)) {
+          if (   c.endsWith(".")                                   // package
+              || canonicalName.length() == c.length()              // class
+              ||    canonicalName.length() > c.length()            // nested
+                 && canonicalName.charAt(c.length()) == '$' ) {
+            if (shouldInclude) {
+              result = true;
+            } else {
+              return false;
+            }
+          }
         }
       }
     }
-    return false;
+    return result;
   }
 }

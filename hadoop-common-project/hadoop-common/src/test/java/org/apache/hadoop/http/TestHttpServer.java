@@ -17,6 +17,41 @@
  */
 package org.apache.hadoop.http;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.Configuration.IntegerRanges;
+import org.apache.hadoop.fs.CommonConfigurationKeys;
+import org.apache.hadoop.http.HttpServer2.QuotingInputFilter.RequestQuoter;
+import org.apache.hadoop.http.resource.JerseyResource;
+import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.net.ServerSocketUtil;
+import org.apache.hadoop.security.Groups;
+import org.apache.hadoop.security.ShellBasedUnixGroupsMapping;
+import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.security.authorize.AccessControlList;
+import org.junit.AfterClass;
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.ExpectedException;
+import org.mockito.Mockito;
+import org.mockito.internal.util.reflection.Whitebox;
+import org.mortbay.jetty.Connector;
+import org.mortbay.util.ajax.JSON;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.servlet.Filter;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletContext;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletRequestWrapper;
+import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.HttpURLConnection;
@@ -33,46 +68,16 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
-import javax.servlet.Filter;
-import javax.servlet.FilterChain;
-import javax.servlet.FilterConfig;
-import javax.servlet.ServletContext;
-import javax.servlet.ServletException;
-import javax.servlet.ServletRequest;
-import javax.servlet.ServletResponse;
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletRequestWrapper;
-import javax.servlet.http.HttpServletResponse;
-
-import org.junit.Assert;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.CommonConfigurationKeys;
-import org.apache.hadoop.http.HttpServer2.QuotingInputFilter.RequestQuoter;
-import org.apache.hadoop.http.resource.JerseyResource;
-import org.apache.hadoop.net.NetUtils;
-import org.apache.hadoop.security.Groups;
-import org.apache.hadoop.security.ShellBasedUnixGroupsMapping;
-import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.hadoop.security.authorize.AccessControlList;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.mockito.Mockito;
-import org.mockito.internal.util.reflection.Whitebox;
-import org.mortbay.jetty.Connector;
-import org.mortbay.util.ajax.JSON;
-
-import static org.mockito.Mockito.*;
+import static org.apache.hadoop.fs.CommonConfigurationKeys.DEFAULT_HADOOP_HTTP_STATIC_USER;
+import static org.apache.hadoop.fs.CommonConfigurationKeys.HADOOP_HTTP_STATIC_USER;
 
 public class TestHttpServer extends HttpServerFunctionalTest {
-  static final Log LOG = LogFactory.getLog(TestHttpServer.class);
+  static final Logger LOG = LoggerFactory.getLogger(TestHttpServer.class);
   private static HttpServer2 server;
-  private static URL baseUrl;
   private static final int MAX_THREADS = 10;
+
+  @Rule
+  public ExpectedException exception = ExpectedException.none();
   
   @SuppressWarnings("serial")
   public static class EchoMapServlet extends HttpServlet {
@@ -122,17 +127,6 @@ public class TestHttpServer extends HttpServerFunctionalTest {
       }
       out.close();
     }    
-  }
-
-  @SuppressWarnings("serial")
-  public static class LongHeaderServlet extends HttpServlet {
-    @Override
-    public void doGet(HttpServletRequest request,
-                      HttpServletResponse response
-    ) throws ServletException, IOException {
-      Assert.assertEquals(63 * 1024, request.getHeader("longheader").length());
-      response.setStatus(HttpServletResponse.SC_OK);
-    }
   }
 
   @SuppressWarnings("serial")
@@ -214,20 +208,10 @@ public class TestHttpServer extends HttpServerFunctionalTest {
                  readOutput(new URL(baseUrl, "/echomap?a=b&c<=d&a=>")));
   }
 
-  /** 
-   *  Test that verifies headers can be up to 64K long. 
-   *  The test adds a 63K header leaving 1K for other headers.
-   *  This is because the header buffer setting is for ALL headers,
-   *  names and values included. */
   @Test public void testLongHeader() throws Exception {
     URL url = new URL(baseUrl, "/longheader");
     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-    StringBuilder sb = new StringBuilder();
-    for (int i = 0 ; i < 63 * 1024; i++) {
-      sb.append("a");
-    }
-    conn.setRequestProperty("longheader", sb.toString());
-    assertEquals(HttpURLConnection.HTTP_OK, conn.getResponseCode());
+    testLongHeader(conn);
   }
 
   @Test public void testContentTypes() throws Exception {
@@ -259,14 +243,72 @@ public class TestHttpServer extends HttpServerFunctionalTest {
     conn.connect();
     assertEquals(200, conn.getResponseCode());
     assertEquals("text/html; charset=utf-8", conn.getContentType());
-
-    // JSPs should default to text/html with utf8
-    servletUrl = new URL(baseUrl, "/testjsp.jsp");
-    conn = (HttpURLConnection)servletUrl.openConnection();
-    conn.connect();
-    assertEquals(200, conn.getResponseCode());
-    assertEquals("text/html; charset=utf-8", conn.getContentType());
   }
+
+  @Test
+  public void testHttpResonseContainsXFrameOptions() throws Exception {
+    validateXFrameOption(HttpServer2.XFrameOption.SAMEORIGIN);
+  }
+
+  @Test
+  public void testHttpResonseContainsDeny() throws Exception {
+    validateXFrameOption(HttpServer2.XFrameOption.DENY);
+  }
+
+  @Test
+  public void testHttpResonseContainsAllowFrom() throws Exception {
+    validateXFrameOption(HttpServer2.XFrameOption.ALLOWFROM);
+  }
+
+  private void validateXFrameOption(HttpServer2.XFrameOption option) throws
+      Exception {
+    Configuration conf = new Configuration();
+    boolean xFrameEnabled = true;
+    HttpServer2 httpServer = createServer(xFrameEnabled,
+        option.toString(), conf);
+    try {
+      HttpURLConnection conn = getHttpURLConnection(httpServer);
+      String xfoHeader = conn.getHeaderField("X-FRAME-OPTIONS");
+      assertTrue("X-FRAME-OPTIONS is absent in the header", xfoHeader != null);
+      assertTrue(xfoHeader.endsWith(option.toString()));
+    } finally {
+      httpServer.stop();
+    }
+  }
+
+  @Test
+  public void testHttpResonseDoesNotContainXFrameOptions() throws Exception {
+    Configuration conf = new Configuration();
+    boolean xFrameEnabled = false;
+    HttpServer2 httpServer = createServer(xFrameEnabled,
+        HttpServer2.XFrameOption.SAMEORIGIN.toString(), conf);
+    try {
+      HttpURLConnection conn = getHttpURLConnection(httpServer);
+      String xfoHeader = conn.getHeaderField("X-FRAME-OPTIONS");
+      assertTrue("Unexpected X-FRAME-OPTIONS in header", xfoHeader == null);
+    } finally {
+      httpServer.stop();
+    }
+  }
+
+  private HttpURLConnection getHttpURLConnection(HttpServer2 httpServer)
+      throws IOException {
+    httpServer.start();
+    URL newURL = getServerURL(httpServer);
+    URL url = new URL(newURL, "");
+    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+    conn.connect();
+    return conn;
+  }
+
+  @Test
+  public void testHttpResonseInvalidValueType() throws Exception {
+    Configuration conf = new Configuration();
+    boolean xFrameEnabled = true;
+    exception.expect(IllegalArgumentException.class);
+    createServer(xFrameEnabled, "Hadoop", conf);
+  }
+
 
   /**
    * Dummy filter that mimics as an authentication filter. Obtains user identity
@@ -416,7 +458,7 @@ public class TestHttpServer extends HttpServerFunctionalTest {
     String serverURL = "http://"
         + NetUtils.getHostPortString(myServer.getConnectorAddress(0)) + "/";
     for (String servlet : new String[] { "conf", "logs", "stacks",
-        "logLevel", "metrics" }) {
+        "logLevel", "metrics", "jmx" }) {
       for (String user : new String[] { "userA", "userB", "userC", "userD" }) {
         assertEquals(HttpURLConnection.HTTP_OK, getHttpStatusCode(serverURL
             + servlet, user));
@@ -424,6 +466,18 @@ public class TestHttpServer extends HttpServerFunctionalTest {
       assertEquals(HttpURLConnection.HTTP_FORBIDDEN, getHttpStatusCode(
           serverURL + servlet, "userE"));
     }
+
+    // hadoop.security.authorization is set as true while
+    // hadoop.http.authentication.type's value is `simple`(default value)
+    // in this case, static user has administrator access
+    final String staticUser = conf.get(HADOOP_HTTP_STATIC_USER,
+        DEFAULT_HADOOP_HTTP_STATIC_USER);
+    for (String servlet : new String[] {"conf", "logs", "stacks",
+        "logLevel", "jmx"}) {
+      assertEquals(HttpURLConnection.HTTP_OK, getHttpStatusCode(
+          serverURL + servlet, staticUser));
+    }
+
     myServer.stop();
   }
   
@@ -433,8 +487,9 @@ public class TestHttpServer extends HttpServerFunctionalTest {
     Mockito.doReturn(null).when(request).getParameterValues("dummy");
     RequestQuoter requestQuoter = new RequestQuoter(request);
     String[] parameterValues = requestQuoter.getParameterValues("dummy");
-    Assert.assertEquals("It should return null "
-        + "when there are no values for the parameter", null, parameterValues);
+    Assert.assertNull(
+        "It should return null " + "when there are no values for the parameter",
+        parameterValues);
   }
 
   @Test
@@ -554,8 +609,7 @@ public class TestHttpServer extends HttpServerFunctionalTest {
       // not bound, ephemeral should return requested port (0 for ephemeral)
       List<?> listeners = (List<?>) Whitebox.getInternalState(server,
           "listeners");
-      Connector listener = (Connector) Whitebox.getInternalState(
-          listeners.get(0), "listener");
+      Connector listener = (Connector) listeners.get(0);
 
       assertEquals(port, listener.getPort());
       // verify hostname is what was given
@@ -567,9 +621,6 @@ public class TestHttpServer extends HttpServerFunctionalTest {
         assertTrue(boundPort != 0); // ephemeral should now return bound port
       } else if (findPort) {
         assertTrue(boundPort > port);
-        // allow a little wiggle room to prevent random test failures if
-        // some consecutive ports are already in use
-        assertTrue(boundPort - port < 8);
       }
     } catch (Exception e) {
       server.stop();
@@ -590,15 +641,39 @@ public class TestHttpServer extends HttpServerFunctionalTest {
     assertEquals(conn.getHeaderField("Expires"), conn.getHeaderField("Date"));
   }
 
-  /**
-   * HTTPServer.Builder should proceed if a external connector is available.
-   */
+  private static void stopHttpServer(HttpServer2 server) throws Exception {
+    if (server != null) {
+      server.stop();
+    }
+  }
+
   @Test
-  public void testHttpServerBuilderWithExternalConnector() throws Exception {
-    Connector c = mock(Connector.class);
-    doReturn("localhost").when(c).getHost();
-    HttpServer2 s = new HttpServer2.Builder().setName("test").setConnector(c)
-        .build();
-    s.stop();
+  public void testPortRanges() throws Exception {
+    Configuration conf = new Configuration();
+    int port =  ServerSocketUtil.waitForPort(49000, 60);
+    int endPort = 49500;
+    conf.set("abc", "49000-49500");
+    HttpServer2.Builder builder = new HttpServer2.Builder()
+        .setName("test").setConf(new Configuration()).setFindPort(false);
+    IntegerRanges ranges = conf.getRange("abc", "");
+    int startPort = 0;
+    if (ranges != null && !ranges.isEmpty()) {
+       startPort = ranges.getRangeStart();
+       builder.setPortRanges(ranges);
+    }
+    builder.addEndpoint(URI.create("http://localhost:" + startPort));
+    HttpServer2 myServer = builder.build();
+    HttpServer2 myServer2 = null;
+    try {
+      myServer.start();
+      assertEquals(port, myServer.getConnectorAddress(0).getPort());
+      myServer2 = builder.build();
+      myServer2.start();
+      assertTrue(myServer2.getConnectorAddress(0).getPort() > port &&
+          myServer2.getConnectorAddress(0).getPort() <= endPort);
+    } finally {
+      stopHttpServer(myServer);
+      stopHttpServer(myServer2);
+    }
   }
 }

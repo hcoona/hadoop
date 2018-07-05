@@ -29,11 +29,14 @@ import java.io.OutputStreamWriter;
 import java.io.StringWriter;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
@@ -45,10 +48,24 @@ import static org.junit.Assert.assertArrayEquals;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration.IntegerRanges;
+import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.security.alias.CredentialProvider;
+import org.apache.hadoop.security.alias.CredentialProviderFactory;
+import org.apache.hadoop.security.alias.LocalJavaKeyStoreProvider;
+import org.apache.hadoop.test.GenericTestUtils;
+import org.apache.log4j.AppenderSkeleton;
+import org.apache.log4j.Logger;
+import org.apache.log4j.spi.LoggingEvent;
+import org.hamcrest.CoreMatchers;
+import org.junit.Assert;
+import org.mockito.Mockito;
+
 import static org.apache.hadoop.util.PlatformName.IBM_JAVA;
+import static org.junit.Assert.fail;
+
 import org.codehaus.jackson.map.ObjectMapper;
 
 public class TestConfiguration extends TestCase {
@@ -56,6 +73,10 @@ public class TestConfiguration extends TestCase {
   private Configuration conf;
   final static String CONFIG = new File("./test-config-TestConfiguration.xml").getAbsolutePath();
   final static String CONFIG2 = new File("./test-config2-TestConfiguration.xml").getAbsolutePath();
+  final static String CONFIG_FOR_ENUM = new File("./test-config-enum-TestConfiguration.xml").getAbsolutePath();
+  final static String CONFIG_FOR_URI = new File(
+      "./test-config-uri-TestConfiguration.xml").toURI().toString();
+
   private static final String CONFIG_MULTI_BYTE = new File(
     "./test-config-multi-byte-TestConfiguration.xml").getAbsolutePath();
   private static final String CONFIG_MULTI_BYTE_SAVED = new File(
@@ -65,6 +86,14 @@ public class TestConfiguration extends TestCase {
             IBM_JAVA?"<?xml version=\"1.0\" encoding=\"UTF-8\"?><configuration>":
   "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?><configuration>";
 
+  /** Four apostrophes. */
+  public static final String ESCAPED = "&apos;&#39;&#0039;&#x27;";
+
+  private static final String SENSITIVE_CONFIG_KEYS =
+      CommonConfigurationKeysPublic.HADOOP_SECURITY_SENSITIVE_CONFIG_KEYS;
+
+  private BufferedWriter out;
+
   @Override
   protected void setUp() throws Exception {
     super.setUp();
@@ -73,9 +102,14 @@ public class TestConfiguration extends TestCase {
   
   @Override
   protected void tearDown() throws Exception {
+    if(out != null) {
+      out.close();
+    }
     super.tearDown();
     new File(CONFIG).delete();
     new File(CONFIG2).delete();
+    new File(CONFIG_FOR_ENUM).delete();
+    new File(new URI(CONFIG_FOR_URI)).delete();
     new File(CONFIG_MULTI_BYTE).delete();
     new File(CONFIG_MULTI_BYTE_SAVED).delete();
   }
@@ -85,29 +119,238 @@ public class TestConfiguration extends TestCase {
     out.write("<configuration>\n");
   }
 
+  private void writeHeader() throws IOException{
+    out.write("<?xml version=\"1.0\"?>\n");
+  }
+
+  private void writeHeader(String encoding) throws IOException{
+    out.write("<?xml version=\"1.0\" encoding=\"" + encoding + "\"?>\n");
+  }
+
+  private void writeConfiguration() throws IOException{
+    out.write("<configuration>\n");
+  }
+
   private void endConfig() throws IOException{
     out.write("</configuration>\n");
     out.close();
   }
 
-  private void addInclude(String filename) throws IOException{
-    out.write("<xi:include href=\"" + filename + "\" xmlns:xi=\"http://www.w3.org/2001/XInclude\"  />\n ");
+  private void startInclude(String filename) throws IOException {
+    out.write("<xi:include href=\"" + filename + "\" xmlns:xi=\"http://www.w3.org/2001/XInclude\"  >\n ");
   }
-  
+
+  private void endInclude() throws IOException{
+    out.write("</xi:include>\n ");
+  }
+
+  private void startFallback() throws IOException {
+    out.write("<xi:fallback>\n ");
+  }
+
+  private void endFallback() throws IOException {
+    out.write("</xi:fallback>\n ");
+  }
+
+  private void declareEntity(String root, String entity, String value)
+      throws IOException {
+    out.write("<!DOCTYPE " + root
+        + " [\n<!ENTITY " + entity + " \"" + value + "\">\n]>");
+  }
+
+  private void declareSystemEntity(String root, String entity, String value)
+      throws IOException {
+    out.write("<!DOCTYPE " + root
+        + " [\n<!ENTITY " + entity + " SYSTEM \"" + value + "\">\n]>");
+  }
+
   public void testInputStreamResource() throws Exception {
     StringWriter writer = new StringWriter();
     out = new BufferedWriter(writer);
     startConfig();
     declareProperty("prop", "A", "A");
     endConfig();
-    
-    InputStream in1 = new ByteArrayInputStream(writer.toString().getBytes());
+
+    InputStream in1 = Mockito.spy(new ByteArrayInputStream(
+          writer.toString().getBytes()));
     Configuration conf = new Configuration(false);
     conf.addResource(in1);
     assertEquals("A", conf.get("prop"));
+    Mockito.verify(in1, Mockito.times(1)).close();
     InputStream in2 = new ByteArrayInputStream(writer.toString().getBytes());
     conf.addResource(in2);
     assertEquals("A", conf.get("prop"));
+  }
+
+  public void testFinalWarnings() throws Exception {
+    // Make a configuration file with a final property
+    StringWriter writer = new StringWriter();
+    out = new BufferedWriter(writer);
+    startConfig();
+    declareProperty("prop", "A", "A", true);
+    endConfig();
+    byte[] bytes = writer.toString().getBytes();
+    InputStream in1 = new ByteArrayInputStream(bytes);
+
+    // Make a second config file with a final property with a different value
+    writer = new StringWriter();
+    out = new BufferedWriter(writer);
+    startConfig();
+    declareProperty("prop", "BB", "BB", true);
+    endConfig();
+    byte[] bytes2 = writer.toString().getBytes();
+    InputStream in2 = new ByteArrayInputStream(bytes2);
+
+    // Attach our own log appender so we can verify output
+    TestAppender appender = new TestAppender();
+    final Logger logger = Logger.getRootLogger();
+    logger.addAppender(appender);
+
+    try {
+      // Add the 2 different resources - this should generate a warning
+      conf.addResource(in1);
+      conf.addResource(in2);
+      assertEquals("should see the first value", "A", conf.get("prop"));
+
+      List<LoggingEvent> events = appender.getLog();
+      assertEquals("overriding a final parameter should cause logging", 1,
+          events.size());
+      LoggingEvent loggingEvent = events.get(0);
+      String renderedMessage = loggingEvent.getRenderedMessage();
+      assertTrue("did not see expected string inside message "+ renderedMessage,
+          renderedMessage.contains("an attempt to override final parameter: "
+              + "prop;  Ignoring."));
+    } finally {
+      // Make sure the appender is removed
+      logger.removeAppender(appender);
+    }
+  }
+
+  public void testNoFinalWarnings() throws Exception {
+    // Make a configuration file with a final property
+    StringWriter writer = new StringWriter();
+    out = new BufferedWriter(writer);
+    startConfig();
+    declareProperty("prop", "A", "A", true);
+    endConfig();
+    byte[] bytes = writer.toString().getBytes();
+    // The 2 input streams both have the same config file
+    InputStream in1 = new ByteArrayInputStream(bytes);
+    InputStream in2 = new ByteArrayInputStream(bytes);
+
+    // Attach our own log appender so we can verify output
+    TestAppender appender = new TestAppender();
+    final Logger logger = Logger.getRootLogger();
+    logger.addAppender(appender);
+
+    try {
+      // Add the resource twice from a stream - should not generate warnings
+      conf.addResource(in1);
+      conf.addResource(in2);
+      assertEquals("A", conf.get("prop"));
+
+      List<LoggingEvent> events = appender.getLog();
+      for (LoggingEvent loggingEvent : events) {
+        System.out.println("Event = " + loggingEvent.getRenderedMessage());
+      }
+      assertTrue("adding same resource twice should not cause logging",
+          events.isEmpty());
+    } finally {
+      // Make sure the appender is removed
+      logger.removeAppender(appender);
+    }
+  }
+
+
+
+  public void testFinalWarningsMultiple() throws Exception {
+    // Make a configuration file with a repeated final property
+    StringWriter writer = new StringWriter();
+    out = new BufferedWriter(writer);
+    startConfig();
+    declareProperty("prop", "A", "A", true);
+    declareProperty("prop", "A", "A", true);
+    endConfig();
+    byte[] bytes = writer.toString().getBytes();
+    InputStream in1 = new ByteArrayInputStream(bytes);
+
+    // Attach our own log appender so we can verify output
+    TestAppender appender = new TestAppender();
+    final Logger logger = Logger.getRootLogger();
+    logger.addAppender(appender);
+
+    try {
+      // Add the resource - this should not produce a warning
+      conf.addResource(in1);
+      assertEquals("should see the value", "A", conf.get("prop"));
+
+      List<LoggingEvent> events = appender.getLog();
+      for (LoggingEvent loggingEvent : events) {
+        System.out.println("Event = " + loggingEvent.getRenderedMessage());
+      }
+      assertTrue("adding same resource twice should not cause logging",
+          events.isEmpty());
+    } finally {
+      // Make sure the appender is removed
+      logger.removeAppender(appender);
+    }
+  }
+
+  public void testFinalWarningsMultipleOverride() throws Exception {
+    // Make a configuration file with 2 final properties with different values
+    StringWriter writer = new StringWriter();
+    out = new BufferedWriter(writer);
+    startConfig();
+    declareProperty("prop", "A", "A", true);
+    declareProperty("prop", "BB", "BB", true);
+    endConfig();
+    byte[] bytes = writer.toString().getBytes();
+    InputStream in1 = new ByteArrayInputStream(bytes);
+
+    // Attach our own log appender so we can verify output
+    TestAppender appender = new TestAppender();
+    final Logger logger = Logger.getRootLogger();
+    logger.addAppender(appender);
+
+    try {
+      // Add the resource - this should produce a warning
+      conf.addResource(in1);
+      assertEquals("should see the value", "A", conf.get("prop"));
+
+      List<LoggingEvent> events = appender.getLog();
+      assertEquals("overriding a final parameter should cause logging", 1,
+          events.size());
+      LoggingEvent loggingEvent = events.get(0);
+      String renderedMessage = loggingEvent.getRenderedMessage();
+      assertTrue("did not see expected string inside message "+ renderedMessage,
+          renderedMessage.contains("an attempt to override final parameter: "
+              + "prop;  Ignoring."));
+    } finally {
+      // Make sure the appender is removed
+      logger.removeAppender(appender);
+    }
+  }
+
+  /**
+   * A simple appender for white box testing.
+   */
+  private static class TestAppender extends AppenderSkeleton {
+    private final List<LoggingEvent> log = new ArrayList<>();
+
+    @Override public boolean requiresLayout() {
+      return false;
+    }
+
+    @Override protected void append(final LoggingEvent loggingEvent) {
+      log.add(loggingEvent);
+    }
+
+    @Override public void close() {
+    }
+
+    public List<LoggingEvent> getLog() {
+      return new ArrayList<>(log);
+    }
   }
 
   /**
@@ -130,11 +373,9 @@ public class TestConfiguration extends TestCase {
       Configuration conf = new Configuration(false);
       conf.addResource(new Path(CONFIG_MULTI_BYTE));
       assertEquals(value, conf.get(name));
-      FileOutputStream fos = new FileOutputStream(CONFIG_MULTI_BYTE_SAVED);
-      try {
+      try (FileOutputStream fos =
+               new FileOutputStream(CONFIG_MULTI_BYTE_SAVED)) {
         conf.writeXml(fos);
-      } finally {
-        IOUtils.closeStream(fos);
       }
 
       conf = new Configuration(false);
@@ -308,7 +549,18 @@ public class TestConfiguration extends TestCase {
     //two spaces one after "this", one before "contains"
     assertEquals("this  contains a comment", conf.get("my.comment"));
   }
-  
+
+  public void testEscapedCharactersInValue() throws IOException {
+    out=new BufferedWriter(new FileWriter(CONFIG));
+    startConfig();
+    appendProperty("my.comment", ESCAPED);
+    endConfig();
+    Path fileResource = new Path(CONFIG);
+    conf.addResource(fileResource);
+    //two spaces one after "this", one before "contains"
+    assertEquals("''''", conf.get("my.comment"));
+  }
+
   public void testTrim() throws IOException {
     out=new BufferedWriter(new FileWriter(CONFIG));
     startConfig();
@@ -337,8 +589,7 @@ public class TestConfiguration extends TestCase {
     Configuration conf = new Configuration();
     String[] dirs = new String[]{"a", "b", "c"};
     for (int i = 0; i < dirs.length; i++) {
-      dirs[i] = new Path(System.getProperty("test.build.data"), dirs[i])
-          .toString();
+      dirs[i] = new Path(GenericTestUtils.getTempPath(dirs[i])).toString();
     }
     conf.set("dirs", StringUtils.join(dirs, ","));
     for (int i = 0; i < 1000; i++) {
@@ -354,8 +605,7 @@ public class TestConfiguration extends TestCase {
     Configuration conf = new Configuration();
     String[] dirs = new String[]{"a", "b", "c"};
     for (int i = 0; i < dirs.length; i++) {
-      dirs[i] = new Path(System.getProperty("test.build.data"), dirs[i])
-          .toString();
+      dirs[i] = new Path(GenericTestUtils.getTempPath(dirs[i])).toString();
     }
     conf.set("dirs", StringUtils.join(dirs, ","));
     for (int i = 0; i < 1000; i++) {
@@ -398,12 +648,21 @@ public class TestConfiguration extends TestCase {
     appendProperty("a","b");
     appendProperty("c","d");
     endConfig();
+    File fileUri = new File(new URI(CONFIG_FOR_URI));
+    out=new BufferedWriter(new FileWriter(fileUri));
+    startConfig();
+    appendProperty("e", "f");
+    appendProperty("g", "h");
+    endConfig();
 
     out=new BufferedWriter(new FileWriter(CONFIG));
     startConfig();
-    addInclude(CONFIG2);
-    appendProperty("e","f");
-    appendProperty("g","h");
+    startInclude(CONFIG2);
+    endInclude();
+    startInclude(CONFIG_FOR_URI);
+    endInclude();
+    appendProperty("i", "j");
+    appendProperty("k", "l");
     endConfig();
 
     // verify that the includes file contains all properties
@@ -411,8 +670,106 @@ public class TestConfiguration extends TestCase {
     conf.addResource(fileResource);
     assertEquals(conf.get("a"), "b"); 
     assertEquals(conf.get("c"), "d"); 
-    assertEquals(conf.get("e"), "f"); 
-    assertEquals(conf.get("g"), "h"); 
+    assertEquals(conf.get("e"), "f");
+    assertEquals(conf.get("g"), "h");
+    assertEquals(conf.get("i"), "j");
+    assertEquals(conf.get("k"), "l");
+    tearDown();
+  }
+
+  public void testCharsetInDocumentEncoding() throws Exception {
+    tearDown();
+    out=new BufferedWriter(new OutputStreamWriter(new FileOutputStream(CONFIG),
+        StandardCharsets.ISO_8859_1));
+    writeHeader(StandardCharsets.ISO_8859_1.displayName());
+    writeConfiguration();
+    appendProperty("a", "b");
+    appendProperty("c", "Müller");
+    endConfig();
+
+    // verify that the includes file contains all properties
+    Path fileResource = new Path(CONFIG);
+    conf.addResource(fileResource);
+    assertEquals(conf.get("a"), "b");
+    assertEquals(conf.get("c"), "Müller");
+    tearDown();
+  }
+
+  public void testEntityReference() throws Exception {
+    tearDown();
+    out=new BufferedWriter(new FileWriter(CONFIG));
+    writeHeader();
+    declareEntity("configuration", "d", "d");
+    writeConfiguration();
+    appendProperty("a", "b");
+    appendProperty("c", "&d;");
+    endConfig();
+
+    // verify that the includes file contains all properties
+    Path fileResource = new Path(CONFIG);
+    conf.addResource(fileResource);
+    assertEquals(conf.get("a"), "b");
+    assertEquals(conf.get("c"), "d");
+    tearDown();
+  }
+
+  public void testSystemEntityReference() throws Exception {
+    tearDown();
+    out=new BufferedWriter(new FileWriter(CONFIG2));
+    out.write("d");
+    out.close();
+    out=new BufferedWriter(new FileWriter(CONFIG));
+    writeHeader();
+    declareSystemEntity("configuration", "d",
+        new Path(CONFIG2).toUri().toString());
+    writeConfiguration();
+    appendProperty("a", "b");
+    appendProperty("c", "&d;");
+    endConfig();
+
+    // verify that the includes file contains all properties
+    Path fileResource = new Path(CONFIG);
+    conf.addResource(fileResource);
+    assertEquals(conf.get("a"), "b");
+    assertEquals(conf.get("c"), "d");
+    tearDown();
+  }
+
+  public void testIncludesWithFallback() throws Exception {
+    tearDown();
+    out=new BufferedWriter(new FileWriter(CONFIG2));
+    startConfig();
+    appendProperty("a","b");
+    appendProperty("c","d");
+    endConfig();
+
+    out=new BufferedWriter(new FileWriter(CONFIG));
+    startConfig();
+    startInclude(CONFIG2);
+    startFallback();
+    appendProperty("a", "b.fallback");
+    appendProperty("c", "d.fallback", true);
+    endFallback();
+    endInclude();
+    appendProperty("e","f");
+    appendProperty("g","h");
+    startInclude("MissingConfig.xml");
+    startFallback();
+    appendProperty("i", "j.fallback");
+    appendProperty("k", "l.fallback", true);
+    endFallback();
+    endInclude();
+    endConfig();
+
+    // verify that the includes file contains all properties
+    Path fileResource = new Path(CONFIG);
+    conf.addResource(fileResource);
+    assertEquals("b", conf.get("a"));
+    assertEquals("d", conf.get("c"));
+    assertEquals("f", conf.get("e"));
+    assertEquals("h", conf.get("g"));
+    assertEquals("j.fallback", conf.get("i"));
+    assertEquals("l.fallback", conf.get("k"));
     tearDown();
   }
 
@@ -430,7 +787,8 @@ public class TestConfiguration extends TestCase {
     out = new BufferedWriter(new FileWriter(relConfig));
     startConfig();
     // Add the relative path instead of the absolute one.
-    addInclude(new File(relConfig2).getName());
+    startInclude(new File(relConfig2).getName());
+    endInclude();
     appendProperty("c", "d");
     endConfig();
 
@@ -446,8 +804,6 @@ public class TestConfiguration extends TestCase {
     new File(new File(relConfig).getParent()).delete();
   }
 
-  BufferedWriter out;
-	
   public void testIntegerRanges() {
     Configuration conf = new Configuration();
     conf.set("first", "-100");
@@ -737,10 +1093,31 @@ public class TestConfiguration extends TestCase {
     conf.setEnum("test.enum", Dingo.FOO);
     assertSame(Dingo.FOO, conf.getEnum("test.enum", Dingo.BAR));
     assertSame(Yak.FOO, conf.getEnum("test.enum", Yak.RAB));
+    conf.setEnum("test.enum", Dingo.FOO);
     boolean fail = false;
     try {
       conf.setEnum("test.enum", Dingo.BAR);
       Yak y = conf.getEnum("test.enum", Yak.FOO);
+    } catch (IllegalArgumentException e) {
+      fail = true;
+    }
+    assertTrue(fail);
+  }
+
+  public void testEnumFromXml() throws IOException {
+    out=new BufferedWriter(new FileWriter(CONFIG_FOR_ENUM));
+    startConfig();
+    appendProperty("test.enum"," \t \n   FOO \t \n");
+    appendProperty("test.enum2"," \t \n   Yak.FOO \t \n");
+    endConfig();
+
+    Configuration conf = new Configuration();
+    Path fileResource = new Path(CONFIG_FOR_ENUM);
+    conf.addResource(fileResource);
+    assertSame(Yak.FOO, conf.getEnum("test.enum", Yak.FOO));
+    boolean fail = false;
+    try {
+      conf.getEnum("test.enum2", Yak.FOO);
     } catch (IllegalArgumentException e) {
       fail = true;
     }
@@ -863,7 +1240,11 @@ public class TestConfiguration extends TestCase {
     conf.set("myAddress", "host2:3");
     addr = conf.getSocketAddr("myAddress", defaultAddr, defaultPort);
     assertEquals("host2:3", NetUtils.getHostPortString(addr));
-    
+
+    conf.set("myAddress", " \n \t    host4:5     \t \n   ");
+    addr = conf.getSocketAddr("myAddress", defaultAddr, defaultPort);
+    assertEquals("host4:5", NetUtils.getHostPortString(addr));
+
     boolean threwException = false;
     conf.set("myAddress", "bad:-port");
     try {
@@ -979,7 +1360,19 @@ public class TestConfiguration extends TestCase {
       this.properties = properties;
     }
   }
-  
+
+  static class SingleJsonConfiguration {
+    private JsonProperty property;
+
+    public JsonProperty getProperty() {
+      return property;
+    }
+
+    public void setProperty(JsonProperty property) {
+      this.property = property;
+    }
+  }
+
   static class JsonProperty {
     String key;
     public String getKey() {
@@ -1010,7 +1403,14 @@ public class TestConfiguration extends TestCase {
     boolean isFinal;
     String resource;
   }
-  
+
+  private Configuration getActualConf(String xmlStr) {
+    Configuration ac = new Configuration(false);
+    InputStream in = new ByteArrayInputStream(xmlStr.getBytes());
+    ac.addResource(in);
+    return ac;
+  }
+
   public void testGetSetTrimmedNames() throws IOException {
     Configuration conf = new Configuration(false);
     conf.set(" name", "value");
@@ -1019,7 +1419,121 @@ public class TestConfiguration extends TestCase {
     assertEquals("value", conf.getRaw("  name  "));
   }
 
-  public void testDumpConfiguration () throws IOException {
+  public void testDumpProperty() throws IOException {
+    StringWriter outWriter = new StringWriter();
+    ObjectMapper mapper = new ObjectMapper();
+    String jsonStr = null;
+    String xmlStr = null;
+    try {
+      Configuration testConf = new Configuration(false);
+      out = new BufferedWriter(new FileWriter(CONFIG));
+      startConfig();
+      appendProperty("test.key1", "value1");
+      appendProperty("test.key2", "value2", true);
+      appendProperty("test.key3", "value3");
+      endConfig();
+      Path fileResource = new Path(CONFIG);
+      testConf.addResource(fileResource);
+      out.close();
+
+      // case 1: dump an existing property
+      // test json format
+      outWriter = new StringWriter();
+      Configuration.dumpConfiguration(testConf, "test.key2", outWriter);
+      jsonStr = outWriter.toString();
+      outWriter.close();
+      mapper = new ObjectMapper();
+      SingleJsonConfiguration jconf1 =
+          mapper.readValue(jsonStr, SingleJsonConfiguration.class);
+      JsonProperty jp1 = jconf1.getProperty();
+      assertEquals("test.key2", jp1.getKey());
+      assertEquals("value2", jp1.getValue());
+      assertEquals(true, jp1.isFinal);
+      assertEquals(fileResource.toString(), jp1.getResource());
+
+      // test xml format
+      outWriter = new StringWriter();
+      testConf.writeXml("test.key2", outWriter);
+      xmlStr = outWriter.toString();
+      outWriter.close();
+      Configuration actualConf1 = getActualConf(xmlStr);
+      assertEquals(1, actualConf1.size());
+      assertEquals("value2", actualConf1.get("test.key2"));
+      assertTrue(actualConf1.getFinalParameters().contains("test.key2"));
+      assertEquals(fileResource.toString(),
+          actualConf1.getPropertySources("test.key2")[0]);
+
+      // case 2: dump an non existing property
+      // test json format
+      try {
+        outWriter = new StringWriter();
+        Configuration.dumpConfiguration(testConf,
+            "test.unknown.key", outWriter);
+        outWriter.close();
+      } catch (Exception e) {
+        assertTrue(e instanceof IllegalArgumentException);
+        assertTrue(e.getMessage().contains("test.unknown.key") &&
+            e.getMessage().contains("not found"));
+      }
+      // test xml format
+      try {
+        outWriter = new StringWriter();
+        testConf.writeXml("test.unknown.key", outWriter);
+        outWriter.close();
+      } catch (Exception e) {
+        assertTrue(e instanceof IllegalArgumentException);
+        assertTrue(e.getMessage().contains("test.unknown.key") &&
+            e.getMessage().contains("not found"));
+      }
+
+      // case 3: specify a null property, ensure all configurations are dumped
+      outWriter = new StringWriter();
+      Configuration.dumpConfiguration(testConf, null, outWriter);
+      jsonStr = outWriter.toString();
+      mapper = new ObjectMapper();
+      JsonConfiguration jconf3 =
+          mapper.readValue(jsonStr, JsonConfiguration.class);
+      assertEquals(3, jconf3.getProperties().length);
+
+      outWriter = new StringWriter();
+      testConf.writeXml(null, outWriter);
+      xmlStr = outWriter.toString();
+      outWriter.close();
+      Configuration actualConf3 = getActualConf(xmlStr);
+      assertEquals(3, actualConf3.size());
+      assertTrue(actualConf3.getProps().containsKey("test.key1") &&
+          actualConf3.getProps().containsKey("test.key2") &&
+          actualConf3.getProps().containsKey("test.key3"));
+
+      // case 4: specify an empty property, ensure all configurations are dumped
+      outWriter = new StringWriter();
+      Configuration.dumpConfiguration(testConf, "", outWriter);
+      jsonStr = outWriter.toString();
+      mapper = new ObjectMapper();
+      JsonConfiguration jconf4 =
+          mapper.readValue(jsonStr, JsonConfiguration.class);
+      assertEquals(3, jconf4.getProperties().length);
+
+      outWriter = new StringWriter();
+      testConf.writeXml("", outWriter);
+      xmlStr = outWriter.toString();
+      outWriter.close();
+      Configuration actualConf4 = getActualConf(xmlStr);
+      assertEquals(3, actualConf4.size());
+      assertTrue(actualConf4.getProps().containsKey("test.key1") &&
+          actualConf4.getProps().containsKey("test.key2") &&
+          actualConf4.getProps().containsKey("test.key3"));
+    } finally {
+      if(outWriter != null) {
+        outWriter.close();
+      }
+      if(out != null) {
+        out.close();
+      }
+    }
+  }
+
+  public void testDumpConfiguration() throws IOException {
     StringWriter outWriter = new StringWriter();
     Configuration.dumpConfiguration(conf, outWriter);
     String jsonStr = outWriter.toString();
@@ -1151,8 +1665,41 @@ public class TestConfiguration extends TestCase {
       assertEquals(fileResource.toString(),prop.getResource());
     }
   }
-  
-    
+
+  public void testDumpSensitiveProperty() throws IOException {
+    final String myPassword = "ThisIsMyPassword";
+    Configuration testConf = new Configuration(false);
+    out = new BufferedWriter(new FileWriter(CONFIG));
+    startConfig();
+    appendProperty("test.password", myPassword);
+    endConfig();
+    Path fileResource = new Path(CONFIG);
+    testConf.addResource(fileResource);
+
+    try (StringWriter outWriter = new StringWriter()) {
+      testConf.set(SENSITIVE_CONFIG_KEYS, "password$");
+      Configuration.dumpConfiguration(testConf, "test.password", outWriter);
+      assertFalse(outWriter.toString().contains(myPassword));
+    }
+  }
+
+  public void testDumpSensitiveConfiguration() throws IOException {
+    final String myPassword = "ThisIsMyPassword";
+    Configuration testConf = new Configuration(false);
+    out = new BufferedWriter(new FileWriter(CONFIG));
+    startConfig();
+    appendProperty("test.password", myPassword);
+    endConfig();
+    Path fileResource = new Path(CONFIG);
+    testConf.addResource(fileResource);
+
+    try (StringWriter outWriter = new StringWriter()) {
+      testConf.set(SENSITIVE_CONFIG_KEYS, "password$");
+      Configuration.dumpConfiguration(testConf, outWriter);
+      assertFalse(outWriter.toString().contains(myPassword));
+    }
+  }
+
   public void testGetValByRegex() {
     Configuration conf = new Configuration();
     String key1 = "t.abc.key1";
@@ -1194,6 +1741,70 @@ public class TestConfiguration extends TestCase {
     }
   }
 
+  public void testInvalidSubstitutation() {
+    final Configuration configuration = new Configuration(false);
+
+    // 2-var loops
+    //
+    final String key = "test.random.key";
+    for (String keyExpression : Arrays.asList(
+    "${" + key + "}",
+    "foo${" + key + "}",
+    "foo${" + key + "}bar",
+    "${" + key + "}bar")) {
+      configuration.set(key, keyExpression);
+      checkSubDepthException(configuration, key);
+    }
+
+    //
+    // 3-variable loops
+    //
+
+    final String expVal1 = "${test.var2}";
+    String testVar1 = "test.var1";
+    configuration.set(testVar1, expVal1);
+    configuration.set("test.var2", "${test.var3}");
+    configuration.set("test.var3", "${test.var1}");
+    checkSubDepthException(configuration, testVar1);
+
+    // 3-variable loop with non-empty value prefix/suffix
+    //
+    final String expVal2 = "foo2${test.var2}bar2";
+    configuration.set(testVar1, expVal2);
+    configuration.set("test.var2", "foo3${test.var3}bar3");
+    configuration.set("test.var3", "foo1${test.var1}bar1");
+    checkSubDepthException(configuration, testVar1);
+  }
+
+  private static void checkSubDepthException(Configuration configuration,
+      String key) {
+    try {
+      configuration.get(key);
+      fail("IllegalStateException depth too large not thrown");
+    } catch (IllegalStateException e) {
+      assertTrue("Unexpected exception text: " + e,
+          e.getMessage().contains("substitution depth"));
+    }
+  }
+
+  public void testIncompleteSubbing() {
+    Configuration configuration = new Configuration(false);
+    String key = "test.random.key";
+    for (String keyExpression : Arrays.asList(
+        "{}",
+        "${}",
+        "{" + key,
+        "${" + key,
+        "foo${" + key,
+        "foo${" + key + "bar",
+        "foo{" + key + "}bar",
+        "${" + key + "bar")) {
+      configuration.set(key, keyExpression);
+      String value = configuration.get(key);
+      assertTrue("Unexpected value " + value, value.equals(keyExpression));
+    }
+  }
+
   public void testGetClassByNameOrNull() throws Exception {
    Configuration config = new Configuration();
    Class<?> clazz = config.getClassByNameOrNull("java.lang.Object");
@@ -1214,6 +1825,157 @@ public class TestConfiguration extends TestCase {
     assertFalse("finalparams not copied", finalParameters.contains("my.var"));
     finalParameters = conf.getFinalParameters();
     assertTrue("my.var is not final", finalParameters.contains("my.var"));
+  }
+
+  /**
+   * A test to check whether this thread goes into infinite loop because of
+   * destruction of data structure by resize of Map. This problem was reported
+   * by SPARK-2546.
+   * @throws Exception
+   */
+  public void testConcurrentAccesses() throws Exception {
+    out = new BufferedWriter(new FileWriter(CONFIG));
+    startConfig();
+    declareProperty("some.config", "xyz", "xyz", false);
+    endConfig();
+    Path fileResource = new Path(CONFIG);
+    Configuration conf = new Configuration();
+    conf.addResource(fileResource);
+
+    class ConfigModifyThread extends Thread {
+      final private Configuration config;
+      final private String prefix;
+
+      public ConfigModifyThread(Configuration conf, String prefix) {
+        config = conf;
+        this.prefix = prefix;
+      }
+
+      @Override
+      public void run() {
+        for (int i = 0; i < 10000; i++) {
+          config.set("some.config.value-" + prefix + i, "value");
+        }
+      }
+    }
+
+    ArrayList<ConfigModifyThread> threads = new ArrayList<>();
+    for (int i = 0; i < 100; i++) {
+      threads.add(new ConfigModifyThread(conf, String.valueOf(i)));
+    }
+    for (Thread t: threads) {
+      t.start();
+    }
+    for (Thread t: threads) {
+      t.join();
+    }
+    // If this test completes without going into infinite loop,
+    // it's expected behaviour.
+  }
+
+  public void testNullValueProperties() throws Exception {
+    Configuration conf = new Configuration();
+    conf.setAllowNullValueProperties(true);
+    out = new BufferedWriter(new FileWriter(CONFIG));
+    startConfig();
+    appendProperty("attr", "value", true);
+    appendProperty("attr", "", true);
+    endConfig();
+    Path fileResource = new Path(CONFIG);
+    conf.addResource(fileResource);
+    assertEquals("value", conf.get("attr"));
+  }
+
+  public void testGetClassesShouldReturnDefaultValue() throws Exception {
+    Configuration config = new Configuration();
+    Class<?>[] classes = 
+      config.getClasses("testClassName", Configuration.class);
+    assertEquals(
+        "Not returning expected number of classes. Number of returned classes ="
+            + classes.length, 1, classes.length);
+    assertEquals("Not returning the default class Name", Configuration.class,
+        classes[0]);
+  }
+
+  public void testGetClassesShouldReturnEmptyArray()
+      throws Exception {
+    Configuration config = new Configuration();
+    config.set("testClassName", "");
+    Class<?>[] classes = config.getClasses("testClassName", Configuration.class);
+    assertEquals(
+        "Not returning expected number of classes. Number of returned classes ="
+            + classes.length, 0, classes.length);
+  }
+  
+  public void testGetPasswordDeprecatedKeyStored() throws Exception {
+    final String oldKey = "test.password.old.key";
+    final String newKey = "test.password.new.key";
+    final String password = "MyPasswordForDeprecatedKey";
+
+    final File tmpDir = GenericTestUtils.getRandomizedTestDir();
+    tmpDir.mkdirs();
+    final String ourUrl = new URI(LocalJavaKeyStoreProvider.SCHEME_NAME,
+        "file",  new File(tmpDir, "test.jks").toURI().getPath(),
+        null).toString();
+
+    conf = new Configuration(false);
+    conf.set(CredentialProviderFactory.CREDENTIAL_PROVIDER_PATH, ourUrl);
+    CredentialProvider provider =
+        CredentialProviderFactory.getProviders(conf).get(0);
+    provider.createCredentialEntry(oldKey, password.toCharArray());
+    provider.flush();
+
+    Configuration.addDeprecation(oldKey, newKey);
+
+    Assert.assertThat(conf.getPassword(newKey),
+        CoreMatchers.is(password.toCharArray()));
+    Assert.assertThat(conf.getPassword(oldKey),
+        CoreMatchers.is(password.toCharArray()));
+
+    FileUtil.fullyDelete(tmpDir);
+  }
+
+  public void testGetPasswordByDeprecatedKey() throws Exception {
+    final String oldKey = "test.password.old.key";
+    final String newKey = "test.password.new.key";
+    final String password = "MyPasswordForDeprecatedKey";
+
+    final File tmpDir = GenericTestUtils.getRandomizedTestDir();
+    tmpDir.mkdirs();
+    final String ourUrl = new URI(LocalJavaKeyStoreProvider.SCHEME_NAME,
+        "file",  new File(tmpDir, "test.jks").toURI().getPath(),
+        null).toString();
+
+    conf = new Configuration(false);
+    conf.set(CredentialProviderFactory.CREDENTIAL_PROVIDER_PATH, ourUrl);
+    CredentialProvider provider =
+        CredentialProviderFactory.getProviders(conf).get(0);
+    provider.createCredentialEntry(newKey, password.toCharArray());
+    provider.flush();
+
+    Configuration.addDeprecation(oldKey, newKey);
+
+    Assert.assertThat(conf.getPassword(newKey),
+        CoreMatchers.is(password.toCharArray()));
+    Assert.assertThat(conf.getPassword(oldKey),
+        CoreMatchers.is(password.toCharArray()));
+
+    FileUtil.fullyDelete(tmpDir);
+  }
+
+  public void testGettingPropertiesWithPrefix() throws Exception {
+    Configuration conf = new Configuration();
+    for (int i = 0; i < 10; i++) {
+      conf.set("prefix" + ".name" + i, "value");
+    }
+    conf.set("different.prefix" + ".name", "value");
+    Map<String, String> props = conf.getPropsWithPrefix("prefix");
+    assertEquals(props.size(), 10);
+
+    // test call with no properties for a given prefix
+    props = conf.getPropsWithPrefix("none");
+    assertNotNull(props.isEmpty());
+    assertTrue(props.isEmpty());
   }
 
   public static void main(String[] argv) throws Exception {

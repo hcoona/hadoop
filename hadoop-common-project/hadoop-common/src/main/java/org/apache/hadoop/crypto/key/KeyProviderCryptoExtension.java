@@ -79,8 +79,9 @@ public class KeyProviderCryptoExtension extends
     protected EncryptedKeyVersion(String keyName,
         String encryptionKeyVersionName, byte[] encryptedKeyIv,
         KeyVersion encryptedKeyVersion) {
-      this.encryptionKeyName = keyName;
-      this.encryptionKeyVersionName = encryptionKeyVersionName;
+      this.encryptionKeyName = keyName == null ? null : keyName.intern();
+      this.encryptionKeyVersionName = encryptionKeyVersionName == null ?
+          null : encryptionKeyVersionName.intern();
       this.encryptedKeyIv = encryptedKeyIv;
       this.encryptedKeyVersion = encryptedKeyVersion;
     }
@@ -254,26 +255,30 @@ public class KeyProviderCryptoExtension extends
       // Generate random bytes for new key and IV
 
       CryptoCodec cc = CryptoCodec.getInstance(keyProvider.getConf());
-      final byte[] newKey = new byte[encryptionKey.getMaterial().length];
-      cc.generateSecureRandom(newKey);
-      final byte[] iv = new byte[cc.getCipherSuite().getAlgorithmBlockSize()];
-      cc.generateSecureRandom(iv);
-      // Encryption key IV is derived from new key's IV
-      final byte[] encryptionIV = EncryptedKeyVersion.deriveIV(iv);
-      Encryptor encryptor = cc.createEncryptor();
-      encryptor.init(encryptionKey.getMaterial(), encryptionIV);
-      int keyLen = newKey.length;
-      ByteBuffer bbIn = ByteBuffer.allocateDirect(keyLen);
-      ByteBuffer bbOut = ByteBuffer.allocateDirect(keyLen);
-      bbIn.put(newKey);
-      bbIn.flip();
-      encryptor.encrypt(bbIn, bbOut);
-      bbOut.flip();
-      byte[] encryptedKey = new byte[keyLen];
-      bbOut.get(encryptedKey);    
-      return new EncryptedKeyVersion(encryptionKeyName,
-          encryptionKey.getVersionName(), iv,
-          new KeyVersion(encryptionKey.getName(), EEK, encryptedKey));
+      try {
+        final byte[] newKey = new byte[encryptionKey.getMaterial().length];
+        cc.generateSecureRandom(newKey);
+        final byte[] iv = new byte[cc.getCipherSuite().getAlgorithmBlockSize()];
+        cc.generateSecureRandom(iv);
+        // Encryption key IV is derived from new key's IV
+        final byte[] encryptionIV = EncryptedKeyVersion.deriveIV(iv);
+        Encryptor encryptor = cc.createEncryptor();
+        encryptor.init(encryptionKey.getMaterial(), encryptionIV);
+        int keyLen = newKey.length;
+        ByteBuffer bbIn = ByteBuffer.allocateDirect(keyLen);
+        ByteBuffer bbOut = ByteBuffer.allocateDirect(keyLen);
+        bbIn.put(newKey);
+        bbIn.flip();
+        encryptor.encrypt(bbIn, bbOut);
+        bbOut.flip();
+        byte[] encryptedKey = new byte[keyLen];
+        bbOut.get(encryptedKey);
+        return new EncryptedKeyVersion(encryptionKeyName,
+            encryptionKey.getVersionName(), iv,
+            new KeyVersion(encryptionKey.getName(), EEK, encryptedKey));
+      } finally {
+        cc.close();
+      }
     }
 
     @Override
@@ -300,20 +305,24 @@ public class KeyProviderCryptoExtension extends
           EncryptedKeyVersion.deriveIV(encryptedKeyVersion.getEncryptedKeyIv());
 
       CryptoCodec cc = CryptoCodec.getInstance(keyProvider.getConf());
-      Decryptor decryptor = cc.createDecryptor();
-      decryptor.init(encryptionKey.getMaterial(), encryptionIV);
-      final KeyVersion encryptedKV =
-          encryptedKeyVersion.getEncryptedKeyVersion();
-      int keyLen = encryptedKV.getMaterial().length;
-      ByteBuffer bbIn = ByteBuffer.allocateDirect(keyLen);
-      ByteBuffer bbOut = ByteBuffer.allocateDirect(keyLen);
-      bbIn.put(encryptedKV.getMaterial());
-      bbIn.flip();
-      decryptor.decrypt(bbIn, bbOut);
-      bbOut.flip();
-      byte[] decryptedKey = new byte[keyLen];
-      bbOut.get(decryptedKey);
-      return new KeyVersion(encryptionKey.getName(), EK, decryptedKey);
+      try {
+        Decryptor decryptor = cc.createDecryptor();
+        decryptor.init(encryptionKey.getMaterial(), encryptionIV);
+        final KeyVersion encryptedKV =
+            encryptedKeyVersion.getEncryptedKeyVersion();
+        int keyLen = encryptedKV.getMaterial().length;
+        ByteBuffer bbIn = ByteBuffer.allocateDirect(keyLen);
+        ByteBuffer bbOut = ByteBuffer.allocateDirect(keyLen);
+        bbIn.put(encryptedKV.getMaterial());
+        bbIn.flip();
+        decryptor.decrypt(bbIn, bbOut);
+        bbOut.flip();
+        byte[] decryptedKey = new byte[keyLen];
+        bbOut.get(decryptedKey);
+        return new KeyVersion(encryptionKey.getName(), EK, decryptedKey);
+      } finally {
+        cc.close();
+      }
     }
 
     @Override
@@ -394,7 +403,12 @@ public class KeyProviderCryptoExtension extends
    * <p/>
    * If the given <code>KeyProvider</code> implements the
    * {@link CryptoExtension} interface the <code>KeyProvider</code> itself
-   * will provide the extension functionality, otherwise a default extension
+   * will provide the extension functionality.
+   * If the given <code>KeyProvider</code> implements the
+   * {@link KeyProviderExtension} interface and the KeyProvider being
+   * extended by the <code>KeyProvider</code> implements the
+   * {@link CryptoExtension} interface, the KeyProvider being extended will
+   * provide the extension functionality. Otherwise, a default extension
    * implementation will be used.
    *
    * @param keyProvider <code>KeyProvider</code> to use to create the
@@ -404,16 +418,27 @@ public class KeyProviderCryptoExtension extends
    */
   public static KeyProviderCryptoExtension createKeyProviderCryptoExtension(
       KeyProvider keyProvider) {
-    CryptoExtension cryptoExtension = (keyProvider instanceof CryptoExtension)
-                         ? (CryptoExtension) keyProvider
-                         : new DefaultCryptoExtension(keyProvider);
+    CryptoExtension cryptoExtension = null;
+    if (keyProvider instanceof CryptoExtension) {
+      cryptoExtension = (CryptoExtension) keyProvider;
+    } else if (keyProvider instanceof KeyProviderExtension &&
+            ((KeyProviderExtension)keyProvider).getKeyProvider() instanceof
+                    KeyProviderCryptoExtension.CryptoExtension) {
+      KeyProviderExtension keyProviderExtension =
+              (KeyProviderExtension)keyProvider;
+      cryptoExtension =
+              (CryptoExtension)keyProviderExtension.getKeyProvider();
+    } else {
+      cryptoExtension = new DefaultCryptoExtension(keyProvider);
+    }
     return new KeyProviderCryptoExtension(keyProvider, cryptoExtension);
   }
 
   @Override
   public void close() throws IOException {
-    if (getKeyProvider() != null) {
-      getKeyProvider().close();
+    KeyProvider provider = getKeyProvider();
+    if (provider != null && provider != this) {
+      provider.close();
     }
   }
 

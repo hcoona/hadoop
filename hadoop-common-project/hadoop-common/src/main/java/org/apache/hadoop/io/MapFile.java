@@ -23,8 +23,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.HadoopIllegalArgumentException;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
@@ -36,6 +35,11 @@ import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.util.Options;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_MAP_INDEX_SKIP_DEFAULT;
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_MAP_INDEX_SKIP_KEY;
 
 /** A file-based map from keys to values.
  * 
@@ -56,7 +60,7 @@ import org.apache.hadoop.util.ReflectionUtils;
 @InterfaceAudience.Public
 @InterfaceStability.Stable
 public class MapFile {
-  private static final Log LOG = LogFactory.getLog(MapFile.class);
+  private static final Logger LOG = LoggerFactory.getLogger(MapFile.class);
 
   /** The name of the index file. */
   public static final String INDEX_FILE_NAME = "index";
@@ -394,7 +398,8 @@ public class MapFile {
         Options.getOption(ComparatorOption.class, opts);
       WritableComparator comparator =
         comparatorOption == null ? null : comparatorOption.getValue();
-      INDEX_SKIP = conf.getInt("io.map.index.skip", 0);
+      INDEX_SKIP = conf.getInt(
+          IO_MAP_INDEX_SKIP_KEY, IO_MAP_INDEX_SKIP_DEFAULT);
       open(dir, comparator, conf, opts);
     }
  
@@ -806,15 +811,40 @@ public class MapFile {
                                     (LongWritable.class));
     }
     try {
-      long pos = 0L;
+      /** What's the position (in bytes) we wrote when we got the last index */
+      long lastIndexPos = -1;
+      /**
+       * What was size when we last wrote an index. Set to MIN_VALUE to ensure
+       * that we have an index at position zero - midKey will throw an exception
+       * if this is not the case
+       */
+      long lastIndexKeyCount = Long.MIN_VALUE;
+      long pos = dataReader.getPosition();
       LongWritable position = new LongWritable();
+      long nextBlock = pos;
+      boolean blockCompressed = dataReader.isBlockCompressed();
       while(dataReader.next(key, value)) {
-        cnt++;
-        if (cnt % indexInterval == 0) {
-          position.set(pos);
-          if (!dryrun) indexWriter.append(key, position);
+        if (blockCompressed) {
+          long curPos = dataReader.getPosition();
+          if (curPos > nextBlock) {
+            pos = nextBlock;                       // current block position
+            nextBlock = curPos;
+          }
         }
-        pos = dataReader.getPosition();
+        // Follow the same logic as in
+        // {@link MapFile.Writer#append(WritableComparable, Writable)}
+        if (cnt >= lastIndexKeyCount + indexInterval && pos > lastIndexPos) {
+          position.set(pos);
+          if (!dryrun) {
+            indexWriter.append(key, position);
+          }
+          lastIndexPos = pos;
+          lastIndexKeyCount = cnt;
+        }
+        if (!blockCompressed) {
+          pos = dataReader.getPosition();         // next record position
+        }
+        cnt++;
       }
     } catch(Throwable t) {
       // truncated data file. swallow it.
@@ -824,6 +854,148 @@ public class MapFile {
     return cnt;
   }
 
+  /**
+   * Class to merge multiple MapFiles of same Key and Value types to one MapFile
+   */
+  public static class Merger {
+    private Configuration conf;
+    private WritableComparator comparator = null;
+    private Reader[] inReaders;
+    private Writer outWriter;
+    private Class<Writable> valueClass = null;
+    private Class<WritableComparable> keyClass = null;
+
+    public Merger(Configuration conf) throws IOException {
+      this.conf = conf;
+    }
+
+    /**
+     * Merge multiple MapFiles to one Mapfile
+     *
+     * @param inMapFiles
+     * @param outMapFile
+     * @throws IOException
+     */
+    public void merge(Path[] inMapFiles, boolean deleteInputs,
+        Path outMapFile) throws IOException {
+      try {
+        open(inMapFiles, outMapFile);
+        mergePass();
+      } finally {
+        close();
+      }
+      if (deleteInputs) {
+        for (int i = 0; i < inMapFiles.length; i++) {
+          Path path = inMapFiles[i];
+          delete(path.getFileSystem(conf), path.toString());
+        }
+      }
+    }
+
+    /*
+     * Open all input files for reading and verify the key and value types. And
+     * open Output file for writing
+     */
+    @SuppressWarnings("unchecked")
+    private void open(Path[] inMapFiles, Path outMapFile) throws IOException {
+      inReaders = new Reader[inMapFiles.length];
+      for (int i = 0; i < inMapFiles.length; i++) {
+        Reader reader = new Reader(inMapFiles[i], conf);
+        if (keyClass == null || valueClass == null) {
+          keyClass = (Class<WritableComparable>) reader.getKeyClass();
+          valueClass = (Class<Writable>) reader.getValueClass();
+        } else if (keyClass != reader.getKeyClass()
+            || valueClass != reader.getValueClass()) {
+          throw new HadoopIllegalArgumentException(
+              "Input files cannot be merged as they"
+                  + " have different Key and Value classes");
+        }
+        inReaders[i] = reader;
+      }
+
+      if (comparator == null) {
+        Class<? extends WritableComparable> cls;
+        cls = keyClass.asSubclass(WritableComparable.class);
+        this.comparator = WritableComparator.get(cls, conf);
+      } else if (comparator.getKeyClass() != keyClass) {
+        throw new HadoopIllegalArgumentException(
+            "Input files cannot be merged as they"
+                + " have different Key class compared to"
+                + " specified comparator");
+      }
+
+      outWriter = new MapFile.Writer(conf, outMapFile,
+          MapFile.Writer.keyClass(keyClass),
+          MapFile.Writer.valueClass(valueClass));
+    }
+
+    /**
+     * Merge all input files to output map file.<br>
+     * 1. Read first key/value from all input files to keys/values array. <br>
+     * 2. Select the least key and corresponding value. <br>
+     * 3. Write the selected key and value to output file. <br>
+     * 4. Replace the already written key/value in keys/values arrays with the
+     * next key/value from the selected input <br>
+     * 5. Repeat step 2-4 till all keys are read. <br>
+     */
+    private void mergePass() throws IOException {
+      // re-usable array
+      WritableComparable[] keys = new WritableComparable[inReaders.length];
+      Writable[] values = new Writable[inReaders.length];
+      // Read first key/value from all inputs
+      for (int i = 0; i < inReaders.length; i++) {
+        keys[i] = ReflectionUtils.newInstance(keyClass, null);
+        values[i] = ReflectionUtils.newInstance(valueClass, null);
+        if (!inReaders[i].next(keys[i], values[i])) {
+          // Handle empty files
+          keys[i] = null;
+          values[i] = null;
+        }
+      }
+
+      do {
+        int currentEntry = -1;
+        WritableComparable currentKey = null;
+        Writable currentValue = null;
+        for (int i = 0; i < keys.length; i++) {
+          if (keys[i] == null) {
+            // Skip Readers reached EOF
+            continue;
+          }
+          if (currentKey == null || comparator.compare(currentKey, keys[i]) > 0) {
+            currentEntry = i;
+            currentKey = keys[i];
+            currentValue = values[i];
+          }
+        }
+        if (currentKey == null) {
+          // Merge Complete
+          break;
+        }
+        // Write the selected key/value to merge stream
+        outWriter.append(currentKey, currentValue);
+        // Replace the already written key/value in keys/values arrays with the
+        // next key/value from the selected input
+        if (!inReaders[currentEntry].next(keys[currentEntry],
+            values[currentEntry])) {
+          // EOF for this file
+          keys[currentEntry] = null;
+          values[currentEntry] = null;
+        }
+      } while (true);
+    }
+
+    private void close() throws IOException {
+      for (int i = 0; i < inReaders.length; i++) {
+        IOUtils.closeStream(inReaders[i]);
+        inReaders[i] = null;
+      }
+      if (outWriter != null) {
+        outWriter.close();
+        outWriter = null;
+      }
+    }
+  }
 
   public static void main(String[] args) throws Exception {
     String usage = "Usage: MapFile inFile outFile";
@@ -839,23 +1011,23 @@ public class MapFile {
     Configuration conf = new Configuration();
     FileSystem fs = FileSystem.getLocal(conf);
     MapFile.Reader reader = null;
-    MapFile.Writer writer = null;
     try {
       reader = new MapFile.Reader(fs, in, conf);
-      writer =
-        new MapFile.Writer(conf, fs, out,
-            reader.getKeyClass().asSubclass(WritableComparable.class),
-            reader.getValueClass());
 
       WritableComparable key = ReflectionUtils.newInstance(reader.getKeyClass()
         .asSubclass(WritableComparable.class), conf);
       Writable value = ReflectionUtils.newInstance(reader.getValueClass()
         .asSubclass(Writable.class), conf);
 
-      while (reader.next(key, value))               // copy all entries
-        writer.append(key, value);
+      try (MapFile.Writer writer = new MapFile.Writer(conf, fs, out,
+          reader.getKeyClass().asSubclass(WritableComparable.class),
+          reader.getValueClass())) {
+        while (reader.next(key, value)) {             // copy all entries
+          writer.append(key, value);
+        }
+      }
     } finally {
-      IOUtils.cleanup(LOG, writer, reader);
+      IOUtils.cleanupWithLogger(LOG, reader);
     }
   }
 }

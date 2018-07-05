@@ -19,10 +19,11 @@
 package org.apache.hadoop.io;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.rmi.server.UID;
 import java.security.MessageDigest;
-import org.apache.commons.logging.*;
+
 import org.apache.hadoop.util.Options;
 import org.apache.hadoop.fs.*;
 import org.apache.hadoop.fs.Options.CreateOpts;
@@ -48,6 +49,15 @@ import org.apache.hadoop.util.NativeCodeLoader;
 import org.apache.hadoop.util.MergeSort;
 import org.apache.hadoop.util.PriorityQueue;
 import org.apache.hadoop.util.Time;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_DEFAULT;
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_KEY;
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_SEQFILE_COMPRESS_BLOCKSIZE_DEFAULT;
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_SEQFILE_COMPRESS_BLOCKSIZE_KEY;
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_SKIP_CHECKSUM_ERRORS_DEFAULT;
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_SKIP_CHECKSUM_ERRORS_KEY;
 
 /** 
  * <code>SequenceFile</code>s are flat files consisting of binary key/value 
@@ -193,7 +203,7 @@ import org.apache.hadoop.util.Time;
 @InterfaceAudience.Public
 @InterfaceStability.Stable
 public class SequenceFile {
-  private static final Log LOG = LogFactory.getLog(SequenceFile.class);
+  private static final Logger LOG = LoggerFactory.getLogger(SequenceFile.class);
 
   private SequenceFile() {}                         // no public ctor
 
@@ -835,7 +845,9 @@ public class SequenceFile {
     DataOutputStream deflateOut = null;
     Metadata metadata = null;
     Compressor compressor = null;
-    
+
+    private boolean appendMode = false;
+
     protected Serializer keySerializer;
     protected Serializer uncompressedValSerializer;
     protected Serializer compressedValSerializer;
@@ -849,7 +861,7 @@ public class SequenceFile {
       try {                                       
         MessageDigest digester = MessageDigest.getInstance("MD5");
         long time = Time.now();
-        digester.update((new UID()+"@"+time).getBytes());
+        digester.update((new UID()+"@"+time).getBytes(StandardCharsets.UTF_8));
         sync = digester.digest();
       } catch (Exception e) {
         throw new RuntimeException(e);
@@ -907,6 +919,13 @@ public class SequenceFile {
       }
     }
 
+    static class AppendIfExistsOption extends Options.BooleanOption implements
+        Option {
+      AppendIfExistsOption(boolean value) {
+        super(value);
+      }
+    }
+
     static class KeyClassOption extends Options.ClassOption implements Option {
       KeyClassOption(Class<?> value) {
         super(value);
@@ -956,7 +975,7 @@ public class SequenceFile {
         return codec;
       }
     }
-    
+
     public static Option file(Path value) {
       return new FileOption(value);
     }
@@ -982,6 +1001,10 @@ public class SequenceFile {
       return new ReplicationOption(value);
     }
     
+    public static Option appendIfExists(boolean value) {
+      return new AppendIfExistsOption(value);
+    }
+
     public static Option blockSize(long value) {
       return new BlockSizeOption(value);
     }
@@ -1028,6 +1051,8 @@ public class SequenceFile {
       ProgressableOption progressOption = 
         Options.getOption(ProgressableOption.class, opts);
       FileOption fileOption = Options.getOption(FileOption.class, opts);
+      AppendIfExistsOption appendIfExistsOption = Options.getOption(
+          AppendIfExistsOption.class, opts);
       FileSystemOption fsOption = Options.getOption(FileSystemOption.class, opts);
       StreamOption streamOption = Options.getOption(StreamOption.class, opts);
       KeyClassOption keyClassOption = 
@@ -1069,7 +1094,57 @@ public class SequenceFile {
           blockSizeOption.getValue();
         Progressable progress = progressOption == null ? null :
           progressOption.getValue();
-        out = fs.create(p, true, bufferSize, replication, blockSize, progress);
+
+        if (appendIfExistsOption != null && appendIfExistsOption.getValue()
+            && fs.exists(p)) {
+
+          // Read the file and verify header details
+          SequenceFile.Reader reader = new SequenceFile.Reader(conf,
+              SequenceFile.Reader.file(p), new Reader.OnlyHeaderOption());
+          try {
+
+            if (keyClassOption.getValue() != reader.getKeyClass()
+                || valueClassOption.getValue() != reader.getValueClass()) {
+              throw new IllegalArgumentException(
+                  "Key/value class provided does not match the file");
+            }
+
+            if (reader.getVersion() != VERSION[3]) {
+              throw new VersionMismatchException(VERSION[3],
+                  reader.getVersion());
+            }
+
+            if (metadataOption != null) {
+              LOG.info("MetaData Option is ignored during append");
+            }
+            metadataOption = (MetadataOption) SequenceFile.Writer
+                .metadata(reader.getMetadata());
+
+            CompressionOption readerCompressionOption = new CompressionOption(
+                reader.getCompressionType(), reader.getCompressionCodec());
+
+            // Codec comparison will be ignored if the compression is NONE
+            if (readerCompressionOption.value != compressionTypeOption.value
+                || (readerCompressionOption.value != CompressionType.NONE
+                    && readerCompressionOption.codec
+                        .getClass() != compressionTypeOption.codec
+                            .getClass())) {
+              throw new IllegalArgumentException(
+                  "Compression option provided does not match the file");
+            }
+
+            sync = reader.getSync();
+
+          } finally {
+            reader.close();
+          }
+
+          out = fs.append(p, bufferSize, progress);
+          this.appendMode = true;
+        } else {
+          out = fs
+              .create(p, true, bufferSize, replication, blockSize, progress);
+        }
       } else {
         out = streamOption.getValue();
       }
@@ -1157,7 +1232,7 @@ public class SequenceFile {
       out.write(sync);                       // write the sync bytes
       out.flush();                           // flush header
     }
-    
+
     /** Initialize. */
     @SuppressWarnings("unchecked")
     void init(Configuration conf, FSDataOutputStream out, boolean ownStream,
@@ -1212,7 +1287,12 @@ public class SequenceFile {
         }
         this.compressedValSerializer.open(deflateOut);
       }
-      writeFileHeader();
+
+      if (appendMode) {
+        sync();
+      } else {
+        writeFileHeader();
+      }
     }
     
     /** Returns the class of keys in this file. */
@@ -1441,7 +1521,9 @@ public class SequenceFile {
                         Option... options) throws IOException {
       super(conf, options);
       compressionBlockSize = 
-        conf.getInt("io.seqfile.compress.blocksize", 1000000);
+        conf.getInt(IO_SEQFILE_COMPRESS_BLOCKSIZE_KEY,
+            IO_SEQFILE_COMPRESS_BLOCKSIZE_DEFAULT
+        );
       keySerializer.close();
       keySerializer.open(keyBuffer);
       uncompressedValSerializer.close();
@@ -1565,7 +1647,7 @@ public class SequenceFile {
 
   /** Get the configured buffer size */
   private static int getBufferSize(Configuration conf) {
-    return conf.getInt("io.file.buffer.size", 4096);
+    return conf.getInt(IO_FILE_BUFFER_SIZE_KEY, IO_FILE_BUFFER_SIZE_DEFAULT);
   }
 
   /** Reads key/value pairs from a sequence-format file. */
@@ -1812,7 +1894,7 @@ public class SequenceFile {
         succeeded = true;
       } finally {
         if (!succeeded) {
-          IOUtils.cleanup(LOG, this.in);
+          IOUtils.cleanupWithLogger(LOG, this.in);
         }
       }
     }
@@ -1843,17 +1925,26 @@ public class SequenceFile {
      */
     private void init(boolean tempReader) throws IOException {
       byte[] versionBlock = new byte[VERSION.length];
-      in.readFully(versionBlock);
+      String exceptionMsg = this + " not a SequenceFile";
+
+      // Try to read sequence file header.
+      try {
+        in.readFully(versionBlock);
+      } catch (EOFException e) {
+        throw new EOFException(exceptionMsg);
+      }
 
       if ((versionBlock[0] != VERSION[0]) ||
           (versionBlock[1] != VERSION[1]) ||
-          (versionBlock[2] != VERSION[2]))
+          (versionBlock[2] != VERSION[2])) {
         throw new IOException(this + " not a SequenceFile");
+      }
 
       // Set 'version'
       version = versionBlock[3];
-      if (version > VERSION[3])
+      if (version > VERSION[3]) {
         throw new VersionMismatchException(VERSION[3], version);
+      }
 
       if (version < BLOCK_COMPRESS_VERSION) {
         UTF8 className = new UTF8();
@@ -2043,6 +2134,14 @@ public class SequenceFile {
     /** Returns the compression codec of data in this file. */
     public CompressionCodec getCompressionCodec() { return codec; }
     
+    private byte[] getSync() {
+      return sync;
+    }
+
+    private byte getVersion() {
+      return version;
+    }
+
     /**
      * Get the compression type for this file.
      * @return the compression type
@@ -2566,7 +2665,8 @@ public class SequenceFile {
 
     private void handleChecksumException(ChecksumException e)
       throws IOException {
-      if (this.conf.getBoolean("io.skip.checksum.errors", false)) {
+      if (this.conf.getBoolean(
+          IO_SKIP_CHECKSUM_ERRORS_KEY, IO_SKIP_CHECKSUM_ERRORS_DEFAULT)) {
         LOG.warn("Bad checksum at "+getPosition()+". Skipping entries.");
         sync(getPosition()+this.conf.getInt("io.bytes.per.checksum", 512));
       } else {
@@ -2687,14 +2787,30 @@ public class SequenceFile {
     }
 
     /** Sort and merge using an arbitrary {@link RawComparator}. */
+    @SuppressWarnings("deprecation")
     public Sorter(FileSystem fs, RawComparator comparator, Class keyClass,
                   Class valClass, Configuration conf, Metadata metadata) {
       this.fs = fs;
       this.comparator = comparator;
       this.keyClass = keyClass;
       this.valClass = valClass;
-      this.memory = conf.getInt("io.sort.mb", 100) * 1024 * 1024;
-      this.factor = conf.getInt("io.sort.factor", 100);
+      // Remember to fall-back on the deprecated MB and Factor keys
+      // until they are removed away permanently.
+      if (conf.get(CommonConfigurationKeys.IO_SORT_MB_KEY) != null) {
+        this.memory = conf.getInt(CommonConfigurationKeys.IO_SORT_MB_KEY,
+          CommonConfigurationKeys.SEQ_IO_SORT_MB_DEFAULT) * 1024 * 1024;
+      } else {
+        this.memory = conf.getInt(CommonConfigurationKeys.SEQ_IO_SORT_MB_KEY,
+          CommonConfigurationKeys.SEQ_IO_SORT_MB_DEFAULT) * 1024 * 1024;
+      }
+      if (conf.get(CommonConfigurationKeys.IO_SORT_FACTOR_KEY) != null) {
+        this.factor = conf.getInt(CommonConfigurationKeys.IO_SORT_FACTOR_KEY,
+            CommonConfigurationKeys.SEQ_IO_SORT_FACTOR_DEFAULT);
+      } else {
+        this.factor = conf.getInt(
+            CommonConfigurationKeys.SEQ_IO_SORT_FACTOR_KEY,
+            CommonConfigurationKeys.SEQ_IO_SORT_FACTOR_DEFAULT);
+      }
       this.conf = conf;
       this.metadata = metadata;
     }

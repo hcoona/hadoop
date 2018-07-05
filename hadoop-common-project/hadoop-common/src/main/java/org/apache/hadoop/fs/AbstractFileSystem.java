@@ -20,9 +20,11 @@ package org.apache.hadoop.fs;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -31,8 +33,6 @@ import java.util.NoSuchElementException;
 import java.util.StringTokenizer;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.HadoopIllegalArgumentException;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
@@ -45,11 +45,14 @@ import org.apache.hadoop.fs.permission.AclEntry;
 import org.apache.hadoop.fs.permission.AclStatus;
 import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.fs.InvalidPathException;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.security.SecurityUtil;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.util.Progressable;
+
+import com.google.common.annotations.VisibleForTesting;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This class provides an interface for implementors of a Hadoop file system
@@ -62,9 +65,9 @@ import org.apache.hadoop.util.Progressable;
  * to the root of the "this" file system .
  */
 @InterfaceAudience.Public
-@InterfaceStability.Evolving /*Evolving for a release,to be changed to Stable */
+@InterfaceStability.Stable
 public abstract class AbstractFileSystem {
-  static final Log LOG = LogFactory.getLog(AbstractFileSystem.class);
+  static final Logger LOG = LoggerFactory.getLogger(AbstractFileSystem.class);
 
   /** Recording statistics per a file system class. */
   private static final Map<URI, Statistics> 
@@ -79,6 +82,9 @@ public abstract class AbstractFileSystem {
   
   /** The statistics for this file system. */
   protected Statistics statistics;
+
+  @VisibleForTesting
+  static final String NO_ABSTRACT_FS_ERROR = "No AbstractFileSystem configured for scheme";
   
   private final URI myUri;
   
@@ -127,6 +133,13 @@ public abstract class AbstractFileSystem {
         CONSTRUCTOR_CACHE.put(theClass, meth);
       }
       result = meth.newInstance(uri, conf);
+    } catch (InvocationTargetException e) {
+      Throwable cause = e.getCause();
+      if (cause instanceof RuntimeException) {
+        throw (RuntimeException) cause;
+      } else {
+        throw new RuntimeException(cause);
+      }
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
@@ -148,11 +161,14 @@ public abstract class AbstractFileSystem {
    */
   public static AbstractFileSystem createFileSystem(URI uri, Configuration conf)
       throws UnsupportedFileSystemException {
-    Class<?> clazz = conf.getClass("fs.AbstractFileSystem." + 
-                                uri.getScheme() + ".impl", null);
+    final String fsImplConf = String.format("fs.AbstractFileSystem.%s.impl",
+        uri.getScheme());
+
+    Class<?> clazz = conf.getClass(fsImplConf, null);
     if (clazz == null) {
-      throw new UnsupportedFileSystemException(
-          "No AbstractFileSystem for scheme: " + uri.getScheme());
+      throw new UnsupportedFileSystemException(String.format(
+          "%s=null: %s: %s",
+          fsImplConf, NO_ABSTRACT_FS_ERROR, uri.getScheme()));
     }
     return (AbstractFileSystem) newInstance(clazz, uri, conf);
   }
@@ -442,8 +458,20 @@ public abstract class AbstractFileSystem {
    * @return server default configuration values
    * 
    * @throws IOException an I/O error occurred
+   * @deprecated use {@link #getServerDefaults(Path)} instead
    */
+  @Deprecated
   public abstract FsServerDefaults getServerDefaults() throws IOException; 
+
+  /**
+   * Return a set of server default configuration values based on path.
+   * @param f path to fetch server defaults
+   * @return server default configuration values for path
+   * @throws IOException an I/O error occurred
+   */
+  public FsServerDefaults getServerDefaults(final Path f) throws IOException {
+    return getServerDefaults();
+  }
 
   /**
    * Return the fully-qualified path of path f resolving the path
@@ -540,7 +568,7 @@ public abstract class AbstractFileSystem {
     }
 
 
-    FsServerDefaults ssDef = getServerDefaults();
+    FsServerDefaults ssDef = getServerDefaults(f);
     if (ssDef.getBlockSize() % ssDef.getBytesPerChecksum() != 0) {
       throw new IOException("Internal error: default blockSize is" + 
           " not a multiple of default bytesPerChecksum ");
@@ -618,7 +646,7 @@ public abstract class AbstractFileSystem {
    */
   public FSDataInputStream open(final Path f) throws AccessControlException,
       FileNotFoundException, UnresolvedLinkException, IOException {
-    return open(f, getServerDefaults().getFileBufferSize());
+    return open(f, getServerDefaults(f).getFileBufferSize());
   }
 
   /**
@@ -629,6 +657,18 @@ public abstract class AbstractFileSystem {
   public abstract FSDataInputStream open(final Path f, int bufferSize)
       throws AccessControlException, FileNotFoundException,
       UnresolvedLinkException, IOException;
+
+  /**
+   * The specification of this method matches that of
+   * {@link FileContext#truncate(Path, long)} except that Path f must be for
+   * this file system.
+   */
+  public boolean truncate(Path f, long newLength)
+      throws AccessControlException, FileNotFoundException,
+      UnresolvedLinkException, IOException {
+    throw new UnsupportedOperationException(getClass().getSimpleName()
+        + " doesn't support truncate");
+  }
 
   /**
    * The specification of this method matches that of
@@ -1170,6 +1210,86 @@ public abstract class AbstractFileSystem {
   public void removeXAttr(Path path, String name) throws IOException {
     throw new UnsupportedOperationException(getClass().getSimpleName()
         + " doesn't support removeXAttr");
+  }
+
+  /**
+   * The specification of this method matches that of
+   * {@link FileContext#createSnapshot(Path, String)}.
+   */
+  public Path createSnapshot(final Path path, final String snapshotName)
+      throws IOException {
+    throw new UnsupportedOperationException(getClass().getSimpleName()
+        + " doesn't support createSnapshot");
+  }
+
+  /**
+   * The specification of this method matches that of
+   * {@link FileContext#renameSnapshot(Path, String, String)}.
+   */
+  public void renameSnapshot(final Path path, final String snapshotOldName,
+      final String snapshotNewName) throws IOException {
+    throw new UnsupportedOperationException(getClass().getSimpleName()
+        + " doesn't support renameSnapshot");
+  }
+
+  /**
+   * The specification of this method matches that of
+   * {@link FileContext#deleteSnapshot(Path, String)}.
+   */
+  public void deleteSnapshot(final Path snapshotDir, final String snapshotName)
+      throws IOException {
+    throw new UnsupportedOperationException(getClass().getSimpleName()
+        + " doesn't support deleteSnapshot");
+  }
+
+  /**
+   * Set the storage policy for a given file or directory.
+   *
+   * @param path file or directory path.
+   * @param policyName the name of the target storage policy. The list
+   *                   of supported Storage policies can be retrieved
+   *                   via {@link #getAllStoragePolicies}.
+   */
+  public void setStoragePolicy(final Path path, final String policyName)
+      throws IOException {
+    throw new UnsupportedOperationException(getClass().getSimpleName()
+        + " doesn't support setStoragePolicy");
+  }
+
+
+  /**
+   * Unset the storage policy set for a given file or directory.
+   * @param src file or directory path.
+   * @throws IOException
+   */
+  public void unsetStoragePolicy(final Path src) throws IOException {
+    throw new UnsupportedOperationException(getClass().getSimpleName()
+        + " doesn't support unsetStoragePolicy");
+  }
+
+  /**
+   * Retrieve the storage policy for a given file or directory.
+   *
+   * @param src file or directory path.
+   * @return storage policy for give file.
+   * @throws IOException
+   */
+  public BlockStoragePolicySpi getStoragePolicy(final Path src)
+      throws IOException {
+    throw new UnsupportedOperationException(getClass().getSimpleName()
+        + " doesn't support getStoragePolicy");
+  }
+
+  /**
+   * Retrieve all the storage policies supported by this file system.
+   *
+   * @return all storage policies supported by this filesystem.
+   * @throws IOException
+   */
+  public Collection<? extends BlockStoragePolicySpi> getAllStoragePolicies()
+      throws IOException {
+    throw new UnsupportedOperationException(getClass().getSimpleName()
+        + " doesn't support getAllStoragePolicies");
   }
 
   @Override //Object

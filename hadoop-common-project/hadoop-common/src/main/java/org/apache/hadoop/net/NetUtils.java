@@ -44,8 +44,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import javax.net.SocketFactory;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.commons.net.util.SubnetUtils;
 import org.apache.commons.net.util.SubnetUtils.SubnetInfo;
 import org.apache.hadoop.classification.InterfaceAudience;
@@ -58,11 +56,13 @@ import org.apache.hadoop.security.SecurityUtil;
 import org.apache.hadoop.util.ReflectionUtils;
 
 import com.google.common.base.Preconditions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @InterfaceAudience.LimitedPrivate({"HDFS", "MapReduce"})
 @InterfaceStability.Unstable
 public class NetUtils {
-  private static final Log LOG = LogFactory.getLog(NetUtils.class);
+  private static final Logger LOG = LoggerFactory.getLogger(NetUtils.class);
   
   private static Map<String, String> hostToResolved = 
                                      new HashMap<String, String>();
@@ -189,6 +189,7 @@ public class NetUtils {
       throw new IllegalArgumentException("Target address cannot be null." +
           helpText);
     }
+    target = target.trim();
     boolean hasScheme = target.contains("://");    
     URI uri = null;
     try {
@@ -287,8 +288,8 @@ public class NetUtils {
     if (fqHost == null) {
       try {
         fqHost = SecurityUtil.getByName(host).getHostName();
-        // slight race condition, but won't hurt 
-        canonicalizedHostCache.put(host, fqHost);
+        // slight race condition, but won't hurt
+        canonicalizedHostCache.putIfAbsent(host, fqHost);
       } catch (UnknownHostException e) {
         fqHost = host;
       }
@@ -637,13 +638,27 @@ public class NetUtils {
 
   /**
    * Return hostname without throwing exception.
+   * The returned hostname String format is "hostname".
+   * @return hostname
+   */
+  public static String getLocalHostname() {
+    try {
+      return InetAddress.getLocalHost().getHostName();
+    } catch(UnknownHostException uhe) {
+      return "" + uhe;
+    }
+  }
+
+  /**
+   * Return hostname without throwing exception.
+   * The returned hostname String format is "hostname/ip address".
    * @return hostname
    */
   public static String getHostname() {
     try {return "" + InetAddress.getLocalHost();}
     catch(UnknownHostException uhe) {return "" + uhe;}
   }
-  
+
   /**
    * Compose a "host:port" string from the address.
    */
@@ -727,18 +742,27 @@ public class NetUtils {
               + ";"
               + see("BindException"));
     } else if (exception instanceof ConnectException) {
-      // connection refused; include the host:port in the error
-      return wrapWithMessage(exception, 
-          "Call From "
-              + localHost
-              + " to "
-              + destHost
-              + ":"
-              + destPort
-              + " failed on connection exception: "
-              + exception
-              + ";"
-              + see("ConnectionRefused"));
+      // Check if client was trying to connect to an unspecified IPv4 address
+      // (0.0.0.0) or IPv6 address(0:0:0:0:0:0:0:0 or ::)
+      if ((destHost != null && (destHost.equals("0.0.0.0") ||
+          destHost.equals("0:0:0:0:0:0:0:0") || destHost.equals("::")))
+          || destPort == 0) {
+        return wrapWithMessage(exception, "Your endpoint configuration" +
+            " is wrong;" + see("UnsetHostnameOrPort"));
+      } else {
+        // connection refused; include the host:port in the error
+        return wrapWithMessage(exception,
+            "Call From "
+                + localHost
+                + " to "
+                + destHost
+                + ":"
+                + destPort
+                + " failed on connection exception: "
+                + exception
+                + ";"
+                + see("ConnectionRefused"));
+      }
     } else if (exception instanceof UnknownHostException) {
       return wrapWithMessage(exception,
           "Invalid host name: "
@@ -767,12 +791,21 @@ public class NetUtils {
               + ": " + exception
               + ";"
               + see("EOFException"));
+    } else if (exception instanceof SocketException) {
+      // Many of the predecessor exceptions are subclasses of SocketException,
+      // so must be handled before this
+      return wrapWithMessage(exception,
+          "Call From "
+              + localHost + " to " + destHost + ":" + destPort
+              + " failed on socket exception: " + exception
+              + ";"
+              + see("SocketException"));
     }
     else {
       return (IOException) new IOException("Failed on local exception: "
-                                               + exception
-                                               + "; Host Details : "
-                                               + getHostDetailsAsString(destHost, destPort, localHost))
+             + exception
+             + "; Host Details : "
+             + getHostDetailsAsString(destHost, destPort, localHost))
           .initCause(exception);
 
     }

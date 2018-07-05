@@ -24,13 +24,13 @@ import java.util.TreeMap;
 
 import javax.security.sasl.Sasl;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.SaslPropertiesResolver;
 import org.apache.hadoop.security.SaslRpcServer.QualityOfProtection;
 import org.apache.hadoop.util.CombinedIPWhiteList;
 import org.apache.hadoop.util.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -54,7 +54,8 @@ import org.apache.hadoop.util.StringUtils;
  *
  */
 public class WhitelistBasedResolver extends SaslPropertiesResolver {
-  public static final Log LOG = LogFactory.getLog(WhitelistBasedResolver.class);
+  public static final Logger LOG =
+      LoggerFactory.getLogger(WhitelistBasedResolver.class);
 
   private static final String FIXEDWHITELIST_DEFAULT_LOCATION = "/etc/hadoop/fixedwhitelist";
 
@@ -138,7 +139,8 @@ public class WhitelistBasedResolver extends SaslPropertiesResolver {
         QualityOfProtection.PRIVACY.toString());
 
     for (int i=0; i < qop.length; i++) {
-      qop[i] = QualityOfProtection.valueOf(qop[i].toUpperCase()).getSaslQop();
+      qop[i] = QualityOfProtection.valueOf(
+          StringUtils.toUpperCase(qop[i])).getSaslQop();
     }
 
     saslProps.put(Sasl.QOP, StringUtils.join(",", qop));

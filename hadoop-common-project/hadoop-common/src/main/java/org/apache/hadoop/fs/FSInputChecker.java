@@ -22,11 +22,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.zip.Checksum;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.util.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 
@@ -37,8 +38,8 @@ import java.nio.IntBuffer;
 @InterfaceAudience.LimitedPrivate({"HDFS"})
 @InterfaceStability.Unstable
 abstract public class FSInputChecker extends FSInputStream {
-  public static final Log LOG 
-  = LogFactory.getLog(FSInputChecker.class);
+  public static final Logger LOG =
+      LoggerFactory.getLogger(FSInputChecker.class);
   
   /** The file name from which data is read from */
   protected Path file;
@@ -214,7 +215,30 @@ abstract public class FSInputChecker extends FSInputStream {
     count = readChecksumChunk(buf, 0, maxChunkSize);
     if (count < 0) count = 0;
   }
-  
+
+  /**
+   * Like read(byte[], int, int), but does not provide a dest buffer,
+   * so the read data is discarded.
+   * @param      len maximum number of bytes to read.
+   * @return     the number of bytes read.
+   * @throws     IOException  if an I/O error occurs.
+   */
+  final protected synchronized int readAndDiscard(int len) throws IOException {
+    int total = 0;
+    while (total < len) {
+      if (pos >= count) {
+        count = readChecksumChunk(buf, 0, maxChunkSize);
+        if (count <= 0) {
+          break;
+        }
+      }
+      int rd = Math.min(count - pos, len - total);
+      pos += rd;
+      total += rd;
+    }
+    return total;
+  }
+
   /*
    * Read characters into a portion of an array, reading from the underlying
    * stream at most once if necessary.

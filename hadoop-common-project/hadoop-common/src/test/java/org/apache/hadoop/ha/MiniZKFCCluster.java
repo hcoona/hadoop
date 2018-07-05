@@ -23,8 +23,6 @@ import static org.junit.Assert.assertEquals;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeys;
 import org.apache.hadoop.ha.HAServiceProtocol.HAServiceState;
@@ -39,6 +37,8 @@ import org.apache.zookeeper.server.ZooKeeperServer;
 
 import com.google.common.base.Preconditions;
 import com.google.common.primitives.Ints;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Harness for starting two dummy ZK FailoverControllers, associated with
@@ -55,7 +55,8 @@ public class MiniZKFCCluster {
   
   private DummySharedResource sharedResource = new DummySharedResource();
   
-  private static final Log LOG = LogFactory.getLog(MiniZKFCCluster.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(MiniZKFCCluster.class);
   
   public MiniZKFCCluster(Configuration conf, ZooKeeperServer zks) {
     this.conf = conf;
@@ -102,9 +103,11 @@ public class MiniZKFCCluster {
    * @throws Exception if either of the services had encountered a fatal error
    */
   public void stop() throws Exception {
-    for (DummyZKFCThread thr : thrs) {
-      if (thr != null) {
-        thr.interrupt();
+    if (thrs != null) {
+      for (DummyZKFCThread thr : thrs) {
+        if (thr != null) {
+          thr.interrupt();
+        }
       }
     }
     if (ctx != null) {
@@ -155,11 +158,16 @@ public class MiniZKFCCluster {
 
   /**
    * Wait for the given HA service to enter the given HA state.
+   * This is based on the state of ZKFC, not the state of HA service.
+   * There could be difference between the two. For example,
+   * When the service becomes unhealthy, ZKFC will quit ZK election and
+   * transition to HAServiceState.INITIALIZING and remain in that state
+   * until the service becomes healthy.
    */
   public void waitForHAState(int idx, HAServiceState state)
       throws Exception {
-    DummyHAService svc = getService(idx);
-    while (svc.state != state) {
+    DummyZKFC svc = getZkfc(idx);
+    while (svc.getServiceState() != state) {
       ctx.checkException();
       Thread.sleep(50);
     }

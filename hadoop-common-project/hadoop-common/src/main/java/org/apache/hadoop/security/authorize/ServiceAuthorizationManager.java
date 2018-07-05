@@ -23,8 +23,6 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability;
@@ -33,8 +31,11 @@ import org.apache.hadoop.fs.CommonConfigurationKeys;
 import org.apache.hadoop.security.KerberosInfo;
 import org.apache.hadoop.security.SecurityUtil;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.util.MachineList;
 
 import com.google.common.annotations.VisibleForTesting;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * An authorization manager which handles service-level authorization
@@ -44,6 +45,7 @@ import com.google.common.annotations.VisibleForTesting;
 @InterfaceStability.Evolving
 public class ServiceAuthorizationManager {
   static final String BLOCKED = ".blocked";
+  static final String HOSTS = ".hosts";
 
   private static final String HADOOP_POLICY_FILE = "hadoop-policy.xml";
 
@@ -51,6 +53,10 @@ public class ServiceAuthorizationManager {
   // and second ACL specifies blocked entries.
   private volatile Map<Class<?>, AccessControlList[]> protocolToAcls =
     new IdentityHashMap<Class<?>, AccessControlList[]>();
+  // For each class, first MachineList in the array specifies the allowed entries
+  // and second MachineList specifies blocked entries.
+  private volatile Map<Class<?>, MachineList[]> protocolToMachineLists =
+    new IdentityHashMap<Class<?>, MachineList[]>();
   
   /**
    * Configuration key for controlling service-level authorization for Hadoop.
@@ -63,8 +69,9 @@ public class ServiceAuthorizationManager {
   public static final String SERVICE_AUTHORIZATION_CONFIG = 
     "hadoop.security.authorization";
   
-  public static final Log AUDITLOG =
-    LogFactory.getLog("SecurityLogger."+ServiceAuthorizationManager.class.getName());
+  public static final Logger AUDITLOG =
+      LoggerFactory.getLogger(
+          "SecurityLogger." + ServiceAuthorizationManager.class.getName());
 
   private static final String AUTHZ_SUCCESSFUL_FOR = "Authorization successful for ";
   private static final String AUTHZ_FAILED_FOR = "Authorization failed for ";
@@ -85,7 +92,8 @@ public class ServiceAuthorizationManager {
                                InetAddress addr
                                ) throws AuthorizationException {
     AccessControlList[] acls = protocolToAcls.get(protocol);
-    if (acls == null) {
+    MachineList[] hosts = protocolToMachineLists.get(protocol);
+    if (acls == null || hosts == null) {
       throw new AuthorizationException("Protocol " + protocol + 
                                        " is not known.");
     }
@@ -109,11 +117,23 @@ public class ServiceAuthorizationManager {
     }
     if((clientPrincipal != null && !clientPrincipal.equals(user.getUserName())) || 
        acls.length != 2  || !acls[0].isUserAllowed(user) || acls[1].isUserAllowed(user)) {
-      AUDITLOG.warn(AUTHZ_FAILED_FOR + user + " for protocol=" + protocol
-          + ", expected client Kerberos principal is " + clientPrincipal);
-      throw new AuthorizationException("User " + user + 
-          " is not authorized for protocol " + protocol + 
-          ", expected client Kerberos principal is " + clientPrincipal);
+      String cause = clientPrincipal != null ?
+          ": this service is only accessible by " + clientPrincipal :
+          ": denied by configured ACL";
+      AUDITLOG.warn(AUTHZ_FAILED_FOR + user
+          + " for protocol=" + protocol + cause);
+      throw new AuthorizationException("User " + user +
+          " is not authorized for protocol " + protocol + cause);
+    }
+    if (addr != null) {
+      String hostAddress = addr.getHostAddress();
+      if (hosts.length != 2 || !hosts[0].includes(hostAddress) ||
+          hosts[1].includes(hostAddress)) {
+        AUDITLOG.warn(AUTHZ_FAILED_FOR + " for protocol=" + protocol
+            + " from host = " +  hostAddress);
+        throw new AuthorizationException("Host " + hostAddress +
+            " is not authorized for protocol " + protocol) ;
+      }
     }
     AUDITLOG.info(AUTHZ_SUCCESSFUL_FOR + user + " for protocol="+protocol);
   }
@@ -135,6 +155,8 @@ public class ServiceAuthorizationManager {
       PolicyProvider provider) {
     final Map<Class<?>, AccessControlList[]> newAcls =
       new IdentityHashMap<Class<?>, AccessControlList[]>();
+    final Map<Class<?>, MachineList[]> newMachineLists =
+      new IdentityHashMap<Class<?>, MachineList[]>();
     
     String defaultAcl = conf.get(
         CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_AUTHORIZATION_DEFAULT_ACL,
@@ -142,6 +164,13 @@ public class ServiceAuthorizationManager {
 
     String defaultBlockedAcl = conf.get(
       CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_AUTHORIZATION_DEFAULT_BLOCKED_ACL, "");
+
+    String defaultServiceHostsKey = getHostKey(
+      CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_AUTHORIZATION_DEFAULT_ACL);
+    String defaultMachineList = conf.get(defaultServiceHostsKey,
+      MachineList.WILDCARD_VALUE);
+    String defaultBlockedMachineList= conf.get(
+     defaultServiceHostsKey+ BLOCKED, "");
 
     // Parse the config file
     Service[] services = provider.getServices();
@@ -157,11 +186,26 @@ public class ServiceAuthorizationManager {
            conf.get(service.getServiceKey() + BLOCKED,
            defaultBlockedAcl));
         newAcls.put(service.getProtocol(), new AccessControlList[] {acl, blockedAcl});
+        String serviceHostsKey = getHostKey(service.getServiceKey());
+        MachineList machineList = new MachineList (conf.get(serviceHostsKey, defaultMachineList));
+        MachineList blockedMachineList = new MachineList(
+          conf.get(serviceHostsKey + BLOCKED, defaultBlockedMachineList));
+        newMachineLists.put(service.getProtocol(),
+            new MachineList[] {machineList, blockedMachineList});
       }
     }
 
     // Flip to the newly parsed permissions
     protocolToAcls = newAcls;
+    protocolToMachineLists = newMachineLists;
+  }
+
+  private String getHostKey(String serviceKey) {
+    int endIndex = serviceKey.lastIndexOf(".");
+    if (endIndex != -1) {
+      return serviceKey.substring(0, endIndex)+ HOSTS;
+    }
+    return serviceKey;
   }
 
   @VisibleForTesting
@@ -177,5 +221,20 @@ public class ServiceAuthorizationManager {
   @VisibleForTesting
   public AccessControlList getProtocolsBlockedAcls(Class<?> className) {
     return protocolToAcls.get(className)[1];
+  }
+
+  @VisibleForTesting
+  public Set<Class<?>> getProtocolsWithMachineLists() {
+    return protocolToMachineLists.keySet();
+  }
+
+  @VisibleForTesting
+  public MachineList getProtocolsMachineList(Class<?> className) {
+    return protocolToMachineLists.get(className)[0];
+  }
+
+  @VisibleForTesting
+  public MachineList getProtocolsBlockedMachineList(Class<?> className) {
+    return protocolToMachineLists.get(className)[1];
   }
 }

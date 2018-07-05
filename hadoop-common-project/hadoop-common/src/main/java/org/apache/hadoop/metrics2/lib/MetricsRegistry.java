@@ -22,7 +22,6 @@ import java.util.Collection;
 import java.util.Map;
 
 import com.google.common.collect.Maps;
-import com.google.common.base.Objects;
 
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
@@ -143,6 +142,7 @@ public class MetricsRegistry {
   public MutableGaugeInt newGauge(String name, String desc, int iVal) {
     return newGauge(Interns.info(name, desc), iVal);
   }
+
   /**
    * Create a mutable integer gauge
    * @param info  metadata of the metric
@@ -181,6 +181,30 @@ public class MetricsRegistry {
   }
 
   /**
+   * Create a mutable float gauge
+   * @param name  of the metric
+   * @param desc  metric description
+   * @param iVal  initial value
+   * @return a new gauge object
+   */
+  public MutableGaugeFloat newGauge(String name, String desc, float iVal) {
+    return newGauge(Interns.info(name, desc), iVal);
+  }
+
+  /**
+   * Create a mutable float gauge
+   * @param info  metadata of the metric
+   * @param iVal  initial value
+   * @return a new gauge object
+   */
+  public synchronized MutableGaugeFloat newGauge(MetricsInfo info, float iVal) {
+    checkMetricName(info.name());
+    MutableGaugeFloat ret = new MutableGaugeFloat(info, iVal);
+    metricsMap.put(info.name(), ret);
+    return ret;
+  }
+
+  /**
    * Create a mutable metric that estimates quantiles of a stream of values
    * @param name of the metric
    * @param desc metric description
@@ -188,16 +212,21 @@ public class MetricsRegistry {
    * @param valueName of the metric (e.g., "Time" or "Latency")
    * @param interval rollover interval of estimator in seconds
    * @return a new quantile estimator object
+   * @throws MetricsException if interval is not a positive integer
    */
   public synchronized MutableQuantiles newQuantiles(String name, String desc,
       String sampleName, String valueName, int interval) {
     checkMetricName(name);
-    MutableQuantiles ret = 
+    if (interval <= 0) {
+      throw new MetricsException("Interval should be positive.  Value passed" +
+          " is: " + interval);
+    }
+    MutableQuantiles ret =
         new MutableQuantiles(name, desc, sampleName, valueName, interval);
     metricsMap.put(name, ret);
     return ret;
   }
-  
+
   /**
    * Create a mutable metric with stats
    * @param name  of the metric
@@ -274,6 +303,23 @@ public class MetricsRegistry {
     MutableRate ret = new MutableRate(name, desc, extended);
     metricsMap.put(name, ret);
     return ret;
+  }
+
+  public synchronized MutableRatesWithAggregation newRatesWithAggregation(
+      String name) {
+    checkMetricName(name);
+    MutableRatesWithAggregation rates = new MutableRatesWithAggregation();
+    metricsMap.put(name, rates);
+    return rates;
+  }
+
+  public synchronized MutableRollingAverages newMutableRollingAverages(
+      String name, String valueName) {
+    checkMetricName(name);
+    MutableRollingAverages rollingAverages =
+        new MutableRollingAverages(valueName);
+    metricsMap.put(name, rollingAverages);
+    return rollingAverages;
   }
 
   synchronized void add(String name, MutableMetric metric) {
@@ -363,6 +409,20 @@ public class MetricsRegistry {
   }
 
   private void checkMetricName(String name) {
+    // Check for invalid characters in metric name
+    boolean foundWhitespace = false;
+    for (int i = 0; i < name.length(); i++) {
+      char c = name.charAt(i);
+      if (Character.isWhitespace(c)) {
+        foundWhitespace = true;
+        break;
+      }
+    }
+    if (foundWhitespace) {
+      throw new MetricsException("Metric name '"+ name +
+          "' contains illegal whitespace character");
+    }
+    // Check if name has already been registered
     if (metricsMap.containsKey(name)) {
       throw new MetricsException("Metric name "+ name +" already exists!");
     }
@@ -389,8 +449,15 @@ public class MetricsRegistry {
   }
 
   @Override public String toString() {
-    return Objects.toStringHelper(this)
-        .add("info", metricsInfo).add("tags", tags()).add("metrics", metrics())
-        .toString();
+    StringBuilder sb = new StringBuilder(32);
+    sb.append(this.getClass().getSimpleName());
+    sb.append("{info=");
+    sb.append(metricsInfo);
+    sb.append(", tags=");
+    sb.append(tags());
+    sb.append(", metrics=");
+    sb.append(metrics());
+    return sb.append('}').toString();
   }
+
 }

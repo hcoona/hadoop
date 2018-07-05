@@ -32,22 +32,37 @@ import org.apache.hadoop.io.Text;
 import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.ProviderUtils;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.test.GenericTestUtils;
+import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 public class TestCredentialProviderFactory {
-  
+  public static final Logger LOG =
+      LoggerFactory.getLogger(TestCredentialProviderFactory.class);
+
+  @Rule
+  public final TestName test = new TestName();
+
+  @Before
+  public void announce() {
+    LOG.info("Running test " + test.getMethodName());
+  }
+
   private static char[] chars = { 'a', 'b', 'c', 'd', 'e', 'f', 'g',
   'h', 'j', 'k', 'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w',
   'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K',
   'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
   '2', '3', '4', '5', '6', '7', '8', '9',};
 
-  private static final File tmpDir =
-      new File(System.getProperty("test.build.data", "/tmp"), "creds");
+  private static final File tmpDir = GenericTestUtils.getTestDir("creds");
 
   @Test
   public void testFactory() throws Exception {
@@ -199,7 +214,7 @@ public class TestCredentialProviderFactory {
     Path path = ProviderUtils.unnestUri(new URI(ourUrl));
     FileSystem fs = path.getFileSystem(conf);
     FileStatus s = fs.getFileStatus(path);
-    assertTrue(s.getPermission().toString().equals("rwx------"));
+    assertEquals("rw-------", s.getPermission().toString());
     assertTrue(file + " should exist", file.isFile());
 
     // check permission retention after explicit change
@@ -207,7 +222,30 @@ public class TestCredentialProviderFactory {
     checkPermissionRetention(conf, ourUrl, path);
   }
 
-  public void checkPermissionRetention(Configuration conf, String ourUrl, 
+  @Test
+  public void testLocalJksProvider() throws Exception {
+    Configuration conf = new Configuration();
+    final Path jksPath = new Path(tmpDir.toString(), "test.jks");
+    final String ourUrl =
+        LocalJavaKeyStoreProvider.SCHEME_NAME + "://file" + jksPath.toUri();
+
+    File file = new File(tmpDir, "test.jks");
+    file.delete();
+    conf.set(CredentialProviderFactory.CREDENTIAL_PROVIDER_PATH, ourUrl);
+    checkSpecificProvider(conf, ourUrl);
+    Path path = ProviderUtils.unnestUri(new URI(ourUrl));
+    FileSystem fs = path.getFileSystem(conf);
+    FileStatus s = fs.getFileStatus(path);
+    assertEquals("Unexpected permissions: " + s.getPermission().toString(),
+        "rw-------", s.getPermission().toString());
+    assertTrue(file + " should exist", file.isFile());
+
+    // check permission retention after explicit change
+    fs.setPermission(path, new FsPermission("777"));
+    checkPermissionRetention(conf, ourUrl, path);
+  }
+
+  public void checkPermissionRetention(Configuration conf, String ourUrl,
       Path path) throws Exception {
     CredentialProvider provider = CredentialProviderFactory.getProviders(conf).get(0);
     // let's add a new credential and flush and check that permissions are still set to 777
@@ -229,7 +267,8 @@ public class TestCredentialProviderFactory {
 
     FileSystem fs = path.getFileSystem(conf);
     FileStatus s = fs.getFileStatus(path);
-    assertTrue("Permissions should have been retained from the preexisting " +
-    		"keystore.", s.getPermission().toString().equals("rwxrwxrwx"));
+    assertEquals("Permissions should have been retained from the preexisting " +
+        "keystore.", "rwxrwxrwx", s.getPermission().toString());
   }
 }
+

@@ -19,7 +19,7 @@ package org.apache.hadoop.http;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.PrintStream;
 import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.URL;
@@ -44,8 +44,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpServletResponse;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.ConfServlet;
@@ -82,6 +80,8 @@ import org.mortbay.thread.QueuedThreadPool;
 import org.mortbay.util.MultiException;
 
 import com.sun.jersey.spi.container.servlet.ServletContainer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Create a Jetty embedded server to answer http requests. The primary goal
@@ -100,7 +100,7 @@ import com.sun.jersey.spi.container.servlet.ServletContainer;
 @InterfaceStability.Evolving
 @Deprecated
 public class HttpServer implements FilterContainer {
-  public static final Log LOG = LogFactory.getLog(HttpServer.class);
+  public static final Logger LOG = LoggerFactory.getLogger(HttpServer.class);
 
   static final String FILTER_INITIALIZER_PROPERTY
       = "hadoop.http.filter.initializers";
@@ -987,9 +987,10 @@ public class HttpServer implements FilterContainer {
         return;
       }
       response.setContentType("text/plain; charset=UTF-8");
-      PrintWriter out = response.getWriter();
-      ReflectionUtils.printThreadInfo(out, "");
-      out.close();
+      try (PrintStream out = new PrintStream(
+          response.getOutputStream(), false, "UTF-8")) {
+        ReflectionUtils.printThreadInfo(out, "");
+      }
       ReflectionUtils.logThreadInfo(LOG, "jsp requested", 1);      
     }
   }

@@ -18,8 +18,6 @@
 
 package org.apache.hadoop.cli;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.cli.util.*;
 import org.apache.hadoop.cli.util.CommandExecutor.Result;
 import org.apache.hadoop.conf.Configuration;
@@ -28,6 +26,9 @@ import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.util.StringUtils;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.xml.sax.Attributes;
 import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
@@ -41,8 +42,8 @@ import java.util.ArrayList;
  * Tests for the Command Line Interface (CLI)
  */
 public class CLITestHelper {
-  private static final Log LOG =
-    LogFactory.getLog(CLITestHelper.class.getName());
+  private static final Logger LOG =
+      LoggerFactory.getLogger(CLITestHelper.class.getName());
   
   // In this mode, it runs the command and compares the actual output
   // with the expected output  
@@ -68,7 +69,7 @@ public class CLITestHelper {
   protected String clitestDataDir = null;
   protected String username = null;
   /**
-   * Read the test config file - testConfig.xml
+   * Read the test config file - testConf.xml
    */
   protected void readTestConfigFile() {
     String testConfigFile = getTestFile();
@@ -297,6 +298,11 @@ public class CLITestHelper {
     
     return compareOutput;
   }
+
+  private boolean compareTextExitCode(ComparatorData compdata,
+      Result cmdResult) {
+    return compdata.getExitCode() == cmdResult.getExitCode();
+  }
   
   /***********************************
    ************* TESTS RUNNER
@@ -329,10 +335,17 @@ public class CLITestHelper {
         final String comptype = cd.getComparatorType();
         
         boolean compareOutput = false;
+        boolean compareExitCode = false;
         
         if (! comptype.equalsIgnoreCase("none")) {
           compareOutput = compareTestOutput(cd, cmdResult);
-          overallTCResult &= compareOutput;
+          if (cd.getExitCode() == -1) {
+            // No need to check exit code if not specified
+            compareExitCode = true;
+          } else {
+            compareExitCode = compareTextExitCode(cd, cmdResult);
+          }
+          overallTCResult &= (compareOutput & compareExitCode);
         }
         
         cd.setExitCode(cmdResult.getExitCode());
@@ -390,6 +403,7 @@ public class CLITestHelper {
         testComparators = new ArrayList<ComparatorData>();
       } else if (qName.equals("comparator")) {
         comparatorData = new ComparatorData();
+        comparatorData.setExitCode(-1);
       }
       charString = "";
     }
@@ -421,6 +435,8 @@ public class CLITestHelper {
         comparatorData.setComparatorType(charString);
       } else if (qName.equals("expected-output")) {
         comparatorData.setExpectedOutput(charString);
+      } else if (qName.equals("expected-exit-code")) {
+        comparatorData.setExitCode(Integer.valueOf(charString));
       } else if (qName.equals("test")) {
         if (!Shell.WINDOWS || runOnWindows) {
           testsFromConfigFile.add(td);

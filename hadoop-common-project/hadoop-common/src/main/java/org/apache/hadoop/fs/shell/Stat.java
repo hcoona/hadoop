@@ -30,15 +30,21 @@ import org.apache.hadoop.fs.FileStatus;
 
 /**
  * Print statistics about path in specified format.
- * Format sequences:
- *   %b: Size of file in blocks
- *   %g: Group name of owner
- *   %n: Filename
- *   %o: Block size
- *   %r: replication
- *   %u: User name of owner
- *   %y: UTC date as &quot;yyyy-MM-dd HH:mm:ss&quot;
- *   %Y: Milliseconds since January 1, 1970 UTC
+ * Format sequences:<br>
+ *   %a: Permissions in octal<br>
+ *   %A: Permissions in symbolic style<br>
+ *   %b: Size of file in bytes<br>
+ *   %F: Type<br>
+ *   %g: Group name of owner<br>
+ *   %n: Filename<br>
+ *   %o: Block size<br>
+ *   %r: replication<br>
+ *   %u: User name of owner<br>
+ *   %x: atime UTC date as &quot;yyyy-MM-dd HH:mm:ss&quot;<br>
+ *   %X: atime Milliseconds since January 1, 1970 UTC<br>
+ *   %y: mtime UTC date as &quot;yyyy-MM-dd HH:mm:ss&quot;<br>
+ *   %Y: mtime Milliseconds since January 1, 1970 UTC<br>
+ * If the format is not specified, %y is used by default.
  */
 @InterfaceAudience.Private
 @InterfaceStability.Unstable
@@ -48,15 +54,24 @@ class Stat extends FsCommand {
     factory.addClass(Stat.class, "-stat");
   }
 
+  private static final String NEWLINE = System.getProperty("line.separator");
+
   public static final String NAME = "stat";
   public static final String USAGE = "[format] <path> ...";
   public static final String DESCRIPTION =
-    "Print statistics about the file/directory at <path> " +
-    "in the specified format. Format accepts filesize in blocks (%b), group name of owner(%g), " +
-    "filename (%n), block size (%o), replication (%r), user name of owner(%u), modification date (%y, %Y)\n";
+    "Print statistics about the file/directory at <path>" + NEWLINE +
+    "in the specified format. Format accepts permissions in" + NEWLINE +
+    "octal (%a) and symbolic (%A), filesize in" + NEWLINE +
+    "bytes (%b), type (%F), group name of owner (%g)," + NEWLINE +
+    "name (%n), block size (%o), replication (%r), user name" + NEWLINE +
+    "of owner (%u), access date (%x, %X)." + NEWLINE +
+    "modification date (%y, %Y)." + NEWLINE +
+    "%x and %y show UTC date as \"yyyy-MM-dd HH:mm:ss\" and" + NEWLINE +
+    "%X and %Y show milliseconds since January 1, 1970 UTC." + NEWLINE +
+    "If the format is not specified, %y is used by default." + NEWLINE;
 
-  protected static final SimpleDateFormat timeFmt;
-  static {
+  protected final SimpleDateFormat timeFmt;
+  {
     timeFmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     timeFmt.setTimeZone(TimeZone.getTimeZone("UTC"));
   }
@@ -86,6 +101,12 @@ class Stat extends FsCommand {
         // this silently drops a trailing %?
         if (i + 1 == fmt.length) break;
         switch (fmt[++i]) {
+          case 'a':
+            buf.append(stat.getPermission().toOctal());
+            break;
+          case 'A':
+            buf.append(stat.getPermission());
+            break;
           case 'b':
             buf.append(stat.getLen());
             break;
@@ -108,6 +129,12 @@ class Stat extends FsCommand {
             break;
           case 'u':
             buf.append(stat.getOwner());
+            break;
+          case 'x':
+            buf.append(timeFmt.format(new Date(stat.getAccessTime())));
+            break;
+          case 'X':
+            buf.append(stat.getAccessTime());
             break;
           case 'y':
             buf.append(timeFmt.format(new Date(stat.getModificationTime())));

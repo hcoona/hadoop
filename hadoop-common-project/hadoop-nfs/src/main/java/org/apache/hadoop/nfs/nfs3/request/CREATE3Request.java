@@ -18,6 +18,7 @@
 package org.apache.hadoop.nfs.nfs3.request;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 import org.apache.hadoop.nfs.nfs3.FileHandle;
 import org.apache.hadoop.nfs.nfs3.Nfs3Constant;
@@ -78,7 +79,7 @@ public class CREATE3Request extends RequestWithHandle {
   public void serialize(XDR xdr) {
     handle.serialize(xdr);
     xdr.writeInt(name.length());
-    xdr.writeFixedOpaque(name.getBytes(), name.length());
+    xdr.writeFixedOpaque(name.getBytes(StandardCharsets.UTF_8), name.length());
     xdr.writeInt(mode);
     objAttr.serialize(xdr);
   }

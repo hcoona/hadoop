@@ -26,8 +26,6 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
@@ -36,13 +34,19 @@ import org.apache.hadoop.security.Groups;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.NativeCodeLoader;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 @InterfaceAudience.LimitedPrivate({"HDFS", "MapReduce"})
 @InterfaceStability.Evolving
 public class TestAccessControlList {
 
-  private static final Log LOG =
-    LogFactory.getLog(TestAccessControlList.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(TestAccessControlList.class);
 
   /**
    * Test the netgroups (groups in ACL rules that start with @)
@@ -143,7 +147,7 @@ public class TestAccessControlList {
     List<String> jerryLeeLewisGroups = groups.getGroups("jerryLeeLewis");
     assertTrue(jerryLeeLewisGroups.contains("@memphis"));
 
-    // allowed becuase his netgroup is in ACL
+    // allowed because his netgroup is in ACL
     UserGroupInformation elvis = 
       UserGroupInformation.createRemoteUser("elvis");
     assertUserAllowed(elvis, acl);
@@ -183,18 +187,18 @@ public class TestAccessControlList {
     AccessControlList acl;
 
     acl = new AccessControlList("*");
-    assertTrue(acl.toString().equals("All users are allowed"));
+    assertEquals("All users are allowed", acl.toString());
     validateGetAclString(acl);
 
     acl = new AccessControlList(" ");
-    assertTrue(acl.toString().equals("No users are allowed"));
+    assertEquals("No users are allowed", acl.toString());
 
     acl = new AccessControlList("user1,user2");
-    assertTrue(acl.toString().equals("Users [user1, user2] are allowed"));
+    assertEquals("Users [user1, user2] are allowed", acl.toString());
     validateGetAclString(acl);
 
     acl = new AccessControlList("user1,user2 ");// with space
-    assertTrue(acl.toString().equals("Users [user1, user2] are allowed"));
+    assertEquals("Users [user1, user2] are allowed", acl.toString());
     validateGetAclString(acl);
 
     acl = new AccessControlList(" group1,group2");
@@ -449,6 +453,11 @@ public class TestAccessControlList {
     assertUserAllowed(susan, acl);
     assertUserAllowed(barbara, acl);
     assertUserAllowed(ian, acl);
+
+    acl = new AccessControlList("");
+    UserGroupInformation spyUser = spy(drwho);
+    acl.isUserAllowed(spyUser);
+    verify(spyUser, never()).getGroupNames();
   }
 
   private void assertUserAllowed(UserGroupInformation ugi,

@@ -1,6 +1,4 @@
-/*
- * Updater.java
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,7 +23,10 @@ import org.apache.hadoop.classification.InterfaceStability;
 
 /**
  * Call-back interface.  See <code>MetricsContext.registerUpdater()</code>.
+ *
+ * @deprecated Use org.apache.hadoop.metrics2 package instead.
  */
+@Deprecated
 @InterfaceAudience.LimitedPrivate({"HDFS", "MapReduce"})
 @InterfaceStability.Evolving
 public interface Updater {

@@ -18,6 +18,7 @@
 package org.apache.hadoop.security.token.delegation.web;
 
 import com.google.common.annotations.VisibleForTesting;
+
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
@@ -28,6 +29,7 @@ import org.apache.hadoop.security.authentication.server.AuthenticationFilter;
 import org.apache.hadoop.security.authentication.server.AuthenticationHandler;
 import org.apache.hadoop.security.authentication.server.AuthenticationToken;
 import org.apache.hadoop.security.authentication.server.KerberosAuthenticationHandler;
+import org.apache.hadoop.security.authentication.server.MultiSchemeAuthenticationHandler;
 import org.apache.hadoop.security.authentication.server.PseudoAuthenticationHandler;
 import org.apache.hadoop.security.authentication.util.ZKSignerSecretProvider;
 import org.apache.hadoop.security.authorize.AuthorizationException;
@@ -37,7 +39,8 @@ import org.apache.hadoop.security.token.delegation.ZKDelegationTokenSecretManage
 import org.apache.hadoop.util.HttpExceptionUtils;
 import org.apache.http.NameValuePair;
 import org.apache.http.client.utils.URLEncodedUtils;
-import org.codehaus.jackson.map.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.servlet.FilterChain;
 import javax.servlet.FilterConfig;
@@ -46,14 +49,12 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpServletResponse;
+
 import java.io.IOException;
-import java.io.Writer;
 import java.nio.charset.Charset;
 import java.security.Principal;
 import java.util.Enumeration;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 
 /**
@@ -78,6 +79,9 @@ public class DelegationTokenAuthenticationFilter
   private static final String APPLICATION_JSON_MIME = "application/json";
   private static final String ERROR_EXCEPTION_JSON = "exception";
   private static final String ERROR_MESSAGE_JSON = "message";
+
+  private static final Logger LOG = LoggerFactory.getLogger(
+          DelegationTokenAuthenticationFilter.class);
 
   /**
    * Sets an external <code>DelegationTokenSecretManager</code> instance to
@@ -113,15 +117,32 @@ public class DelegationTokenAuthenticationFilter
   protected Properties getConfiguration(String configPrefix,
       FilterConfig filterConfig) throws ServletException {
     Properties props = super.getConfiguration(configPrefix, filterConfig);
+    setAuthHandlerClass(props);
+    return props;
+  }
+
+  /**
+   * Set AUTH_TYPE property to the name of the corresponding authentication
+   * handler class based on the input properties.
+   * @param props input properties.
+   */
+  protected void setAuthHandlerClass(Properties props)
+      throws ServletException {
     String authType = props.getProperty(AUTH_TYPE);
+    if (authType == null) {
+      throw new ServletException("Config property "
+          + AUTH_TYPE + " doesn't exist");
+    }
     if (authType.equals(PseudoAuthenticationHandler.TYPE)) {
       props.setProperty(AUTH_TYPE,
           PseudoDelegationTokenAuthenticationHandler.class.getName());
     } else if (authType.equals(KerberosAuthenticationHandler.TYPE)) {
       props.setProperty(AUTH_TYPE,
           KerberosDelegationTokenAuthenticationHandler.class.getName());
+    } else if (authType.equals(MultiSchemeAuthenticationHandler.TYPE)) {
+      props.setProperty(AUTH_TYPE,
+          MultiSchemeDelegationTokenAuthenticationHandler.class.getName());
     }
-    return props;
   }
 
   /**
@@ -156,14 +177,7 @@ public class DelegationTokenAuthenticationFilter
 
   @Override
   public void init(FilterConfig filterConfig) throws ServletException {
-    // A single CuratorFramework should be used for a ZK cluster.
-    // If the ZKSignerSecretProvider has already created it, it has to
-    // be set here... to be used by the ZKDelegationTokenSecretManager
-    ZKDelegationTokenSecretManager.setCurator((CuratorFramework)
-        filterConfig.getServletContext().getAttribute(ZKSignerSecretProvider.
-            ZOOKEEPER_SIGNER_SECRET_PROVIDER_CURATOR_CLIENT_ATTRIBUTE));
     super.init(filterConfig);
-    ZKDelegationTokenSecretManager.setCurator(null);
     AuthenticationHandler handler = getAuthenticationHandler();
     AbstractDelegationTokenSecretManager dtSecretManager =
         (AbstractDelegationTokenSecretManager) filterConfig.getServletContext().
@@ -188,14 +202,30 @@ public class DelegationTokenAuthenticationFilter
     ProxyUsers.refreshSuperUserGroupsConfiguration(conf, PROXYUSER_PREFIX);
   }
 
+  @Override
+  protected void initializeAuthHandler(String authHandlerClassName,
+      FilterConfig filterConfig) throws ServletException {
+    // A single CuratorFramework should be used for a ZK cluster.
+    // If the ZKSignerSecretProvider has already created it, it has to
+    // be set here... to be used by the ZKDelegationTokenSecretManager
+    ZKDelegationTokenSecretManager.setCurator((CuratorFramework)
+        filterConfig.getServletContext().getAttribute(ZKSignerSecretProvider.
+            ZOOKEEPER_SIGNER_SECRET_PROVIDER_CURATOR_CLIENT_ATTRIBUTE));
+    super.initializeAuthHandler(authHandlerClassName, filterConfig);
+    ZKDelegationTokenSecretManager.setCurator(null);
+  }
+
   protected void setHandlerAuthMethod(SaslRpcServer.AuthMethod authMethod) {
     this.handlerAuthMethod = authMethod;
   }
 
   @VisibleForTesting
   static String getDoAs(HttpServletRequest request) {
-    List<NameValuePair> list = URLEncodedUtils.parse(request.getQueryString(),
-        UTF8_CHARSET);
+    String queryString = request.getQueryString();
+    if (queryString == null) {
+      return null;
+    }
+    List<NameValuePair> list = URLEncodedUtils.parse(queryString, UTF8_CHARSET);
     if (list != null) {
       for (NameValuePair nv : list) {
         if (DelegationTokenAuthenticatedURL.DO_AS.
@@ -231,11 +261,16 @@ public class DelegationTokenAuthenticationFilter
         if (doAsUser != null) {
           ugi = UserGroupInformation.createProxyUser(doAsUser, ugi);
           try {
-            ProxyUsers.authorize(ugi, request.getRemoteHost());
+            ProxyUsers.authorize(ugi, request.getRemoteAddr());
           } catch (AuthorizationException ex) {
             HttpExceptionUtils.createServletExceptionResponse(response,
                 HttpServletResponse.SC_FORBIDDEN, ex);
             requestCompleted = true;
+            if (LOG.isDebugEnabled()) {
+              LOG.debug("Authentication exception: " + ex.getMessage(), ex);
+            } else {
+              LOG.warn("Authentication exception: " + ex.getMessage());
+            }
           }
         }
       }
@@ -272,5 +307,4 @@ public class DelegationTokenAuthenticationFilter
       }
     }
   }
-
 }

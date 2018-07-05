@@ -1,6 +1,4 @@
-/*
- * GangliaContext.java
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,23 +23,27 @@ import java.net.DatagramPacket;
 import java.net.SocketAddress;
 import java.net.UnknownHostException;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.metrics.ContextFactory;
 import org.apache.hadoop.net.DNS;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Context for sending metrics to Ganglia version 3.1.x.
  * 
  * 3.1.1 has a slightly different wire portal compared to 3.0.x.
+ *
+ * @deprecated Use {@link org.apache.hadoop.metrics2.sink.ganglia.GangliaSink31}
+ * instead.
  */
+@Deprecated
 public class GangliaContext31 extends GangliaContext {
 
   String hostName = "UNKNOWN.example.com";
 
-  private static final Log LOG = 
-    LogFactory.getLog("org.apache.hadoop.util.GangliaContext31");
+  private static final Logger LOG =
+      LoggerFactory.getLogger("org.apache.hadoop.util.GangliaContext31");
 
   public void init(String contextName, ContextFactory factory) {
     super.init(contextName, factory);
@@ -60,7 +62,7 @@ public class GangliaContext31 extends GangliaContext {
           conf.get("dfs.datanode.dns.interface","default"),
           conf.get("dfs.datanode.dns.nameserver","default"));
       } catch (UnknownHostException uhe) {
-        LOG.error(uhe);
+        LOG.error(uhe.toString());
     	hostName = "UNKNOWN.example.com";
       }
     }
@@ -80,15 +82,12 @@ public class GangliaContext31 extends GangliaContext {
       return;
     }
 
-    LOG.debug("Emitting metric " + name + ", type " + type + ", value " + 
-      value + " from hostname" + hostName);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Emitting metric " + name + ", type " + type + ", value " +
+          value + " from hostname" + hostName);
+    }
 
     String units = getUnits(name);
-    if (units == null) {
-      LOG.warn("Metric name " + name + ", value " + value
-        + " had 'null' units");
-      units = "";
-    }
     int slope = getSlope(name);
     int tmax = getTmax(name);
     int dmax = getDmax(name);

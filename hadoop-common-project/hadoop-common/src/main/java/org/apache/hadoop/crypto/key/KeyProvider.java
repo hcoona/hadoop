@@ -23,6 +23,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
 import java.util.Date;
@@ -68,8 +69,8 @@ public abstract class KeyProvider {
 
     protected KeyVersion(String name, String versionName,
                          byte[] material) {
-      this.name = name;
-      this.versionName = versionName;
+      this.name = name == null ? null : name.intern();
+      this.versionName = versionName == null ? null : versionName.intern();
       this.material = material;
     }
 
@@ -207,7 +208,8 @@ public abstract class KeyProvider {
      */
     protected byte[] serialize() throws IOException {
       ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-      JsonWriter writer = new JsonWriter(new OutputStreamWriter(buffer));
+      JsonWriter writer = new JsonWriter(
+          new OutputStreamWriter(buffer, StandardCharsets.UTF_8));
       try {
         writer.beginObject();
         if (cipher != null) {
@@ -250,8 +252,9 @@ public abstract class KeyProvider {
       int versions = 0;
       String description = null;
       Map<String, String> attributes = null;
-      JsonReader reader = new JsonReader(new InputStreamReader
-        (new ByteArrayInputStream(bytes)));
+      JsonReader reader =
+          new JsonReader(new InputStreamReader(new ByteArrayInputStream(bytes),
+              StandardCharsets.UTF_8));
       try {
         reader.beginObject();
         while (reader.hasNext()) {
@@ -554,6 +557,10 @@ public abstract class KeyProvider {
   public KeyVersion rollNewVersion(String name) throws NoSuchAlgorithmException,
                                                        IOException {
     Metadata meta = getMetadata(name);
+    if (meta == null) {
+      throw new IOException("Can't find Metadata for key " + name);
+    }
+
     byte[] material = generateKey(meta.getBitLength(), meta.getCipher());
     return rollNewVersion(name, material);
   }
@@ -604,5 +611,37 @@ public abstract class KeyProvider {
       }
     }
     throw new IOException("Can't find KeyProvider for key " + keyName);
+  }
+
+  /**
+   * Does this provider require a password? This means that a password is
+   * required for normal operation, and it has not been found through normal
+   * means. If true, the password should be provided by the caller using
+   * setPassword().
+   * @return Whether or not the provider requires a password
+   * @throws IOException
+   */
+  public boolean needsPassword() throws IOException {
+    return false;
+  }
+
+  /**
+   * If a password for the provider is needed, but is not provided, this will
+   * return a warning and instructions for supplying said password to the
+   * provider.
+   * @return A warning and instructions for supplying the password
+   */
+  public String noPasswordWarning() {
+    return null;
+  }
+
+  /**
+   * If a password for the provider is needed, but is not provided, this will
+   * return an error message and instructions for supplying said password to
+   * the provider.
+   * @return An error message and instructions for supplying the password
+   */
+  public String noPasswordError() {
+    return null;
   }
 }

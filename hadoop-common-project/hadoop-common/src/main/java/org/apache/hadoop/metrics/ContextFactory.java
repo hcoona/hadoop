@@ -1,6 +1,4 @@
-/*
- * ContextFactory.java
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -36,7 +34,10 @@ import org.apache.hadoop.metrics.spi.NullContext;
 /**
  * Factory class for creating MetricsContext objects.  To obtain an instance
  * of this class, use the static <code>getFactory()</code> method.
+ *
+ * @deprecated Use org.apache.hadoop.metrics2 package instead.
  */
+@Deprecated
 @InterfaceAudience.LimitedPrivate({"HDFS", "MapReduce"})
 @InterfaceStability.Evolving
 public class ContextFactory {

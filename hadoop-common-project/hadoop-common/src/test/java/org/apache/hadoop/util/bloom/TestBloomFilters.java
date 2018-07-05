@@ -1,5 +1,3 @@
-package org.apache.hadoop.util.bloom;
-
 /**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -18,11 +16,14 @@ package org.apache.hadoop.util.bloom;
  * limitations under the License.
  */
 
+package org.apache.hadoop.util.bloom;
+
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.AbstractCollection;
+import java.util.BitSet;
 import java.util.Iterator;
 
 import org.apache.hadoop.util.bloom.BloomFilterCommonTester.BloomFilterTestStrategy;
@@ -236,5 +237,27 @@ public class TestBloomFilters {
                 BloomFilterTestStrategy.FILTER_OR_STRATEGY,
                 BloomFilterTestStrategy.FILTER_AND_STRATEGY,
                 BloomFilterTestStrategy.FILTER_XOR_STRATEGY)).test();
+  }
+
+  @Test
+  public void testFiltersWithLargeVectorSize() {
+    int hashId = Hash.MURMUR_HASH;
+    Filter filter
+        = new BloomFilter(Integer.MAX_VALUE, hashFunctionNumber, hashId);
+    BloomFilterCommonTester.of(hashId, numInsertions)
+        .withFilterInstance(filter)
+        .withTestCases(ImmutableSet.of(
+                BloomFilterTestStrategy.WRITE_READ_STRATEGY
+        )).test();
+  }
+
+  @Test
+  public void testNot() {
+    BloomFilter bf = new BloomFilter(8, 1, Hash.JENKINS_HASH);
+    bf.bits = BitSet.valueOf(new byte[] { (byte) 0x95 });
+    BitSet origBitSet = (BitSet) bf.bits.clone();
+    bf.not();
+    assertFalse("BloomFilter#not should have inverted all bits",
+                bf.bits.intersects(origBitSet));
   }
 }

@@ -29,25 +29,28 @@ import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static java.lang.Thread.State.*;
 import java.lang.management.GarbageCollectorMXBean;
 import java.util.List;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 
 /**
  * Singleton class which reports Java Virtual Machine metrics to the metrics API.  
  * Any application can create an instance of this class in order to emit
  * Java VM metrics.  
+ *
+ * @deprecated Use {@link org.apache.hadoop.metrics2.source.JvmMetrics} instead.
  */
+@Deprecated
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public class JvmMetrics implements Updater {
     
     private static final float M = 1024*1024;
     private static JvmMetrics theInstance = null;
-    private static Log log = LogFactory.getLog(JvmMetrics.class);
+    private static Logger log = LoggerFactory.getLogger(JvmMetrics.class);
     
     private MetricsRecord metrics;
     

@@ -18,6 +18,7 @@
 package org.apache.hadoop.ipc;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 
 import org.apache.hadoop.classification.InterfaceAudience;
 
@@ -39,7 +40,8 @@ public class RpcConstants {
   /**
    * The first four bytes of Hadoop RPC connections
    */
-  public static final ByteBuffer HEADER = ByteBuffer.wrap("hrpc".getBytes());
+  public static final ByteBuffer HEADER =
+      ByteBuffer.wrap("hrpc".getBytes(StandardCharsets.UTF_8));
   
   // 1 : Introduce ping and server does not throw away RPCs
   // 3 : Introduce the protocol into the RPC connection header

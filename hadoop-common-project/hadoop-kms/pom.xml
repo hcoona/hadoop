@@ -86,7 +86,7 @@
     <dependency>
       <groupId>org.mortbay.jetty</groupId>
       <artifactId>jetty</artifactId>
-      <scope>test</scope>
+      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>
@@ -190,6 +190,12 @@
     <dependency>
       <groupId>org.apache.curator</groupId>
       <artifactId>curator-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- 'mvn dependency:analyze' fails to detect use of this dependency -->
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk16</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -377,7 +383,7 @@
                       cd "${project.build.directory}/tomcat.exp"
                       gzip -cd ../../downloads/apache-tomcat-${tomcat.version}.tar.gz | tar xf -
                     </echo>
-                    <exec executable="sh" dir="${project.build.directory}"
+                    <exec executable="${shell-executable}" dir="${project.build.directory}"
                           failonerror="true">
                       <arg line="./tomcat-untar.sh"/>
                     </exec>
@@ -388,6 +394,9 @@
                     <delete dir="${project.build.directory}/tomcat.exp"/>
                     <delete dir="${kms.tomcat.dist.dir}/webapps"/>
                     <mkdir dir="${kms.tomcat.dist.dir}/webapps"/>
+                    <delete file="${kms.tomcat.dist.dir}/conf/catalina-default.properties"/>
+                    <copy file="${basedir}/src/main/tomcat/catalina-default.properties"
+                          toDir="${kms.tomcat.dist.dir}/conf"/>
                     <delete file="${kms.tomcat.dist.dir}/conf/server.xml"/>
                     <copy file="${basedir}/src/main/tomcat/server.xml"
                           toDir="${kms.tomcat.dist.dir}/conf"/>
@@ -420,7 +429,7 @@
                       cd "${project.build.directory}"
                       tar cf - ${project.artifactId}-${project.version} | gzip > ${project.artifactId}-${project.version}.tar.gz
                     </echo>
-                    <exec executable="sh" dir="${project.build.directory}"
+                    <exec executable="${shell-executable}" dir="${project.build.directory}"
                           failonerror="true">
                       <arg line="./dist-maketar.sh"/>
                     </exec>

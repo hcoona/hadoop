@@ -17,15 +17,16 @@
  */
 package org.apache.hadoop.fs;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.util.LineReader;
 import org.apache.hadoop.util.Progressable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.EOFException;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
@@ -49,7 +50,8 @@ import java.util.*;
 
 public class HarFileSystem extends FileSystem {
 
-  private static final Log LOG = LogFactory.getLog(HarFileSystem.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(HarFileSystem.class);
 
   public static final String METADATA_CACHE_ENTRIES_KEY = "fs.har.metadatacache.entries";
   public static final int METADATA_CACHE_ENTRIES_DEFAULT = 10;
@@ -220,12 +222,7 @@ public class HarFileSystem extends FileSystem {
       return FileSystem.getDefaultUri(conf);
     }
     String authority = rawURI.getAuthority();
-    if (authority == null) {
-      throw new IOException("URI: " + rawURI
-          + " is an invalid Har URI since authority==null."
-          + "  Expecting har://<scheme>-<host>/<path>.");
-    }
- 
+
     int i = authority.indexOf('-');
     if (i < 0) {
       throw new IOException("URI: " + rawURI
@@ -489,19 +486,12 @@ public class HarFileSystem extends FileSystem {
   }
   
   static class Store {
-    public Store() {
-      begin = end = startHash = endHash = 0;
-    }
-    public Store(long begin, long end, int startHash, int endHash) {
+    public Store(long begin, long end) {
       this.begin = begin;
       this.end = end;
-      this.startHash = startHash;
-      this.endHash = endHash;
     }
     public long begin;
     public long end;
-    public int startHash;
-    public int endHash;
   }
   
   /**
@@ -594,7 +584,7 @@ public class HarFileSystem extends FileSystem {
     public HarStatus(String harString) throws UnsupportedEncodingException {
       String[] splits = harString.split(" ");
       this.name = decodeFileName(splits[0]);
-      this.isDir = "dir".equals(splits[1]) ? true: false;
+      this.isDir = "dir".equals(splits[1]);
       // this is equal to "none" if its a directory
       this.partName = splits[2];
       this.startIndex = Long.parseLong(splits[3]);
@@ -725,7 +715,6 @@ public class HarFileSystem extends FileSystem {
     throw new IOException("Har: create not allowed.");
   }
 
-  @SuppressWarnings("deprecation")
   @Override
   public FSDataOutputStream createNonRecursive(Path f, boolean overwrite,
       int bufferSize, short replication, long blockSize, Progressable progress)
@@ -767,6 +756,14 @@ public class HarFileSystem extends FileSystem {
   @Override
   public FSDataOutputStream append(Path f) throws IOException {
     throw new IOException("Har: append not allowed");
+  }
+
+  /**
+   * Not implemented.
+   */
+  @Override
+  public boolean truncate(Path f, long newLength) throws IOException {
+    throw new IOException("Har: truncate not allowed");
   }
 
   /**
@@ -972,6 +969,9 @@ public class HarFileSystem extends FileSystem {
       @Override
       public synchronized int read(byte[] b, int offset, int len) 
         throws IOException {
+        if (len == 0) {
+          return 0;
+        }
         int newlen = len;
         int ret = -1;
         if (position + len > end) {
@@ -1058,15 +1058,14 @@ public class HarFileSystem extends FileSystem {
       @Override
       public void readFully(long pos, byte[] b, int offset, int length) 
       throws IOException {
+        validatePositionedReadArgs(pos, b, offset, length);
+        if (length == 0) {
+          return;
+        }
         if (start + length + pos > end) {
-          throw new IOException("Not enough bytes to read.");
+          throw new EOFException("Not enough bytes to read.");
         }
         underLyingStream.readFully(pos + start, b, offset, length);
-      }
-      
-      @Override
-      public void readFully(long pos, byte[] b) throws IOException {
-          readFully(pos, b, 0, b.length);
       }
 
       @Override
@@ -1167,18 +1166,15 @@ public class HarFileSystem extends FileSystem {
           int b = lin.readLine(line);
           read += b;
           readStr = line.toString().split(" ");
-          int startHash = Integer.parseInt(readStr[0]);
-          int endHash  = Integer.parseInt(readStr[1]);
           stores.add(new Store(Long.parseLong(readStr[2]), 
-              Long.parseLong(readStr[3]), startHash,
-              endHash));
+              Long.parseLong(readStr[3])));
           line.clear();
         }
       } catch (IOException ioe) {
         LOG.warn("Encountered exception ", ioe);
         throw ioe;
       } finally {
-        IOUtils.cleanup(LOG, lin, in);
+        IOUtils.cleanupWithLogger(LOG, lin, in);
       }
 
       FSDataInputStream aIn = fs.open(archiveIndexPath);
@@ -1203,7 +1199,7 @@ public class HarFileSystem extends FileSystem {
           }
         }
       } finally {
-        IOUtils.cleanup(LOG, aIn);
+        IOUtils.cleanupWithLogger(LOG, aIn);
       }
     }
   }
@@ -1245,6 +1241,12 @@ public class HarFileSystem extends FileSystem {
     return fs.getUsed();
   }
 
+  /** Return the total size of all files from a specified path.*/
+  @Override
+  public long getUsed(Path path) throws IOException {
+    return fs.getUsed(path);
+  }
+
   @SuppressWarnings("deprecation")
   @Override
   public long getDefaultBlockSize() {
@@ -1266,5 +1268,15 @@ public class HarFileSystem extends FileSystem {
   @Override
   public short getDefaultReplication(Path f) {
     return fs.getDefaultReplication(f);
+  }
+
+  @Override
+  public FSDataOutputStreamBuilder createFile(Path path) {
+    return fs.createFile(path);
+  }
+
+  @Override
+  public FSDataOutputStreamBuilder appendFile(Path path) {
+    return fs.appendFile(path);
   }
 }

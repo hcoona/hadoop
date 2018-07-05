@@ -19,9 +19,13 @@ package org.apache.hadoop.fs;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem.Statistics;
+import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.hadoop.util.Shell;
 
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_DEFAULT;
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_KEY;
 import static org.apache.hadoop.fs.FileSystemTestHelper.*;
 
 import java.io.*;
@@ -31,23 +35,39 @@ import java.util.Random;
 
 import static org.junit.Assert.*;
 import static org.junit.Assume.assumeTrue;
+import static org.mockito.Mockito.*;
 
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.Timeout;
+import org.mockito.internal.util.reflection.Whitebox;
+
 
 /**
  * This class tests the local file system via the FileSystem abstraction.
  */
 public class TestLocalFileSystem {
-  private static final String TEST_ROOT_DIR
-    = System.getProperty("test.build.data","build/test/data") + "/work-dir/localfs";
+  private static final File base =
+      GenericTestUtils.getTestDir("work-dir/localfs");
 
-  private final File base = new File(TEST_ROOT_DIR);
+  private static final String TEST_ROOT_DIR = base.getAbsolutePath();
   private final Path TEST_PATH = new Path(TEST_ROOT_DIR, "test-file");
   private Configuration conf;
   private LocalFileSystem fileSys;
+
+  /**
+   * standard test timeout: {@value}.
+   */
+  public static final int DEFAULT_TEST_TIMEOUT = 60 * 1000;
+
+  /**
+   * Set the timeout for every test.
+   */
+  @Rule
+  public Timeout testTimeout = new Timeout(DEFAULT_TEST_TIMEOUT);
 
   private void cleanupFile(FileSystem fs, Path name) throws IOException {
     assertTrue(fs.exists(name));
@@ -68,12 +88,13 @@ public class TestLocalFileSystem {
     FileUtil.setWritable(base, true);
     FileUtil.fullyDelete(base);
     assertTrue(!base.exists());
+    RawLocalFileSystem.useStatIfAvailable();
   }
 
   /**
    * Test the capability of setting the working directory.
    */
-  @Test(timeout = 10000)
+  @Test
   public void testWorkingDirectory() throws IOException {
     Path origDir = fileSys.getWorkingDirectory();
     Path subdir = new Path(TEST_ROOT_DIR, "new");
@@ -127,7 +148,7 @@ public class TestLocalFileSystem {
    * test Syncable interface on raw local file system
    * @throws IOException
    */
-  @Test(timeout = 1000)
+  @Test
   public void testSyncable() throws IOException {
     FileSystem fs = fileSys.getRawFileSystem();
     Path file = new Path(TEST_ROOT_DIR, "syncable");
@@ -160,7 +181,7 @@ public class TestLocalFileSystem {
     }
   }
   
-  @Test(timeout = 10000)
+  @Test
   public void testCopy() throws IOException {
     Path src = new Path(TEST_ROOT_DIR, "dingo");
     Path dst = new Path(TEST_ROOT_DIR, "yak");
@@ -186,7 +207,7 @@ public class TestLocalFileSystem {
     }
   }
 
-  @Test(timeout = 1000)
+  @Test
   public void testHomeDirectory() throws IOException {
     Path home = new Path(System.getProperty("user.home"))
       .makeQualified(fileSys);
@@ -194,7 +215,7 @@ public class TestLocalFileSystem {
     assertEquals(home, fsHome);
   }
 
-  @Test(timeout = 1000)
+  @Test
   public void testPathEscapes() throws IOException {
     Path path = new Path(TEST_ROOT_DIR, "foo%bar");
     writeFile(fileSys, path, 1);
@@ -203,7 +224,7 @@ public class TestLocalFileSystem {
     cleanupFile(fileSys, path);
   }
   
-  @Test(timeout = 1000)
+  @Test
   public void testCreateFileAndMkdirs() throws IOException {
     Path test_dir = new Path(TEST_ROOT_DIR, "test_dir");
     Path test_file = new Path(test_dir, "file1");
@@ -239,7 +260,7 @@ public class TestLocalFileSystem {
   }
 
   /** Test deleting a file, directory, and non-existent path */
-  @Test(timeout = 1000)
+  @Test
   public void testBasicDelete() throws IOException {
     Path dir1 = new Path(TEST_ROOT_DIR, "dir1");
     Path file1 = new Path(TEST_ROOT_DIR, "file1");
@@ -254,7 +275,7 @@ public class TestLocalFileSystem {
     assertTrue("Did not delete non-empty dir", fileSys.delete(dir1));
   }
   
-  @Test(timeout = 1000)
+  @Test
   public void testStatistics() throws Exception {
     int fileSchemeCount = 0;
     for (Statistics stats : FileSystem.getAllStatistics()) {
@@ -265,7 +286,7 @@ public class TestLocalFileSystem {
     assertEquals(1, fileSchemeCount);
   }
 
-  @Test(timeout = 1000)
+  @Test
   public void testHasFileDescriptor() throws IOException {
     Path path = new Path(TEST_ROOT_DIR, "test-file");
     writeFile(fileSys, path, 1);
@@ -275,7 +296,7 @@ public class TestLocalFileSystem {
     bis.close();
   }
 
-  @Test(timeout = 1000)
+  @Test
   public void testListStatusWithColons() throws IOException {
     assumeTrue(!Shell.WINDOWS);
     File colonFile = new File(TEST_ROOT_DIR, "foo:bar");
@@ -301,7 +322,7 @@ public class TestLocalFileSystem {
         stats[0].getPath().toUri().getPath());
   }
   
-  @Test(timeout = 10000)
+  @Test
   public void testReportChecksumFailure() throws IOException {
     base.mkdirs();
     assertTrue(base.exists() && base.isDirectory());
@@ -373,8 +394,15 @@ public class TestLocalFileSystem {
     assertTrue(dataFileFound);
     assertTrue(checksumFileFound);
   }
-  
-  @Test(timeout = 1000)
+
+  private void checkTimesStatus(Path path,
+    long expectedModTime, long expectedAccTime) throws IOException {
+    FileStatus status = fileSys.getFileStatus(path);
+    assertEquals(expectedModTime, status.getModificationTime());
+    assertEquals(expectedAccTime, status.getAccessTime());
+  }
+
+  @Test
   public void testSetTimes() throws Exception {
     Path path = new Path(TEST_ROOT_DIR, "set-times");
     writeFile(fileSys, path, 1);
@@ -382,15 +410,24 @@ public class TestLocalFileSystem {
     // test only to the nearest second, as the raw FS may not
     // support millisecond timestamps
     long newModTime = 12345000;
+    long newAccTime = 23456000;
 
     FileStatus status = fileSys.getFileStatus(path);
     assertTrue("check we're actually changing something", newModTime != status.getModificationTime());
-    long accessTime = status.getAccessTime();
+    assertTrue("check we're actually changing something", newAccTime != status.getAccessTime());
+
+    fileSys.setTimes(path, newModTime, newAccTime);
+    checkTimesStatus(path, newModTime, newAccTime);
+
+    newModTime = 34567000;
 
     fileSys.setTimes(path, newModTime, -1);
-    status = fileSys.getFileStatus(path);
-    assertEquals(newModTime, status.getModificationTime());
-    assertEquals(accessTime, status.getAccessTime());
+    checkTimesStatus(path, newModTime, newAccTime);
+
+    newAccTime = 45678000;
+
+    fileSys.setTimes(path, -1, newAccTime);
+    checkTimesStatus(path, newModTime, newAccTime);
   }
 
   /**
@@ -555,5 +592,110 @@ public class TestLocalFileSystem {
     Path resolved = fs.resolvePath(pathWithFragment);
     assertEquals("resolvePath did not strip fragment from Path", pathQualified,
         resolved);
+  }
+
+  @Test
+  public void testAppendSetsPosCorrectly() throws Exception {
+    FileSystem fs = fileSys.getRawFileSystem();
+    Path file = new Path(TEST_ROOT_DIR, "test-append");
+
+    fs.delete(file, true);
+    FSDataOutputStream out = fs.create(file);
+
+    try {
+      out.write("text1".getBytes());
+    } finally {
+      out.close();
+    }
+
+    // Verify the position
+    out = fs.append(file);
+    try {
+      assertEquals(5, out.getPos());
+      out.write("text2".getBytes());
+    } finally {
+      out.close();
+    }
+
+    // Verify the content
+    FSDataInputStream in = fs.open(file);
+    try {
+      byte[] buf = new byte[in.available()];
+      in.readFully(buf);
+      assertEquals("text1text2", new String(buf));
+    } finally {
+      in.close();
+    }
+  }
+
+  @Test
+  public void testFileStatusPipeFile() throws Exception {
+    RawLocalFileSystem origFs = new RawLocalFileSystem();
+    RawLocalFileSystem fs = spy(origFs);
+    Configuration conf = mock(Configuration.class);
+    fs.setConf(conf);
+    Whitebox.setInternalState(fs, "useDeprecatedFileStatus", false);
+    Path path = new Path("/foo");
+    File pipe = mock(File.class);
+    when(pipe.isFile()).thenReturn(false);
+    when(pipe.isDirectory()).thenReturn(false);
+    when(pipe.exists()).thenReturn(true);
+
+    FileStatus stat = mock(FileStatus.class);
+    doReturn(pipe).when(fs).pathToFile(path);
+    doReturn(stat).when(fs).getFileStatus(path);
+    FileStatus[] stats = fs.listStatus(path);
+    assertTrue(stats != null && stats.length == 1 && stats[0] == stat);
+  }
+
+  @Test
+  public void testFSOutputStreamBuilder() throws Exception {
+    Path path = new Path(TEST_ROOT_DIR, "testBuilder");
+
+    try {
+      FSDataOutputStreamBuilder builder =
+          fileSys.createFile(path).recursive();
+      FSDataOutputStream out = builder.build();
+      String content = "Create with a generic type of createFile!";
+      byte[] contentOrigin = content.getBytes("UTF8");
+      out.write(contentOrigin);
+      out.close();
+
+      FSDataInputStream input = fileSys.open(path);
+      byte[] buffer =
+          new byte[(int) (fileSys.getFileStatus(path).getLen())];
+      input.readFully(0, buffer);
+      input.close();
+      Assert.assertArrayEquals("The data be read should equals with the "
+          + "data written.", contentOrigin, buffer);
+    } catch (IOException e) {
+      throw e;
+    }
+
+    // Test value not being set for replication, block size, buffer size
+    // and permission
+    FSDataOutputStreamBuilder builder =
+        fileSys.createFile(path);
+    builder.build();
+    Assert.assertEquals("Should be default block size",
+        builder.getBlockSize(), fileSys.getDefaultBlockSize());
+    Assert.assertEquals("Should be default replication factor",
+        builder.getReplication(), fileSys.getDefaultReplication());
+    Assert.assertEquals("Should be default buffer size",
+        builder.getBufferSize(),
+        fileSys.getConf().getInt(IO_FILE_BUFFER_SIZE_KEY,
+            IO_FILE_BUFFER_SIZE_DEFAULT));
+    Assert.assertEquals("Should be default permission",
+        builder.getPermission(), FsPermission.getFileDefault());
+
+    // Test set 0 to replication, block size and buffer size
+    builder = fileSys.createFile(path);
+    builder.bufferSize(0).blockSize(0).replication((short) 0);
+    Assert.assertEquals("Block size should be 0",
+        builder.getBlockSize(), 0);
+    Assert.assertEquals("Replication factor should be 0",
+        builder.getReplication(), 0);
+    Assert.assertEquals("Buffer size should be 0",
+        builder.getBufferSize(), 0);
   }
 }

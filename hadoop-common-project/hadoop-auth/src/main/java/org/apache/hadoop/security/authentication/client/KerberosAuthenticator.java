@@ -14,6 +14,8 @@
 package org.apache.hadoop.security.authentication.client;
 
 import org.apache.commons.codec.binary.Base64;
+import org.apache.hadoop.security.authentication.server.HttpConstants;
+import org.apache.hadoop.security.authentication.util.AuthToken;
 import org.apache.hadoop.security.authentication.util.KerberosUtil;
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSManager;
@@ -27,6 +29,7 @@ import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.Configuration;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
+
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -41,9 +44,9 @@ import static org.apache.hadoop.util.PlatformName.IBM_JAVA;
 
 /**
  * The {@link KerberosAuthenticator} implements the Kerberos SPNEGO authentication sequence.
- * <p/>
+ * <p>
  * It uses the default principal for the Kerberos cache (normally set via kinit).
- * <p/>
+ * <p>
  * It falls back to the {@link PseudoAuthenticator} if the HTTP endpoint does not trigger an SPNEGO authentication
  * sequence.
  */
@@ -55,17 +58,18 @@ public class KerberosAuthenticator implements Authenticator {
   /**
    * HTTP header used by the SPNEGO server endpoint during an authentication sequence.
    */
-  public static final String WWW_AUTHENTICATE = "WWW-Authenticate";
+  public static final String WWW_AUTHENTICATE =
+      HttpConstants.WWW_AUTHENTICATE_HEADER;
 
   /**
    * HTTP header used by the SPNEGO client endpoint during an authentication sequence.
    */
-  public static final String AUTHORIZATION = "Authorization";
+  public static final String AUTHORIZATION = HttpConstants.AUTHORIZATION_HEADER;
 
   /**
    * HTTP header prefix used by the SPNEGO client/server endpoints during an authentication sequence.
    */
-  public static final String NEGOTIATE = "Negotiate";
+  public static final String NEGOTIATE = HttpConstants.NEGOTIATE;
 
   private static final String AUTH_HTTP_METHOD = "OPTIONS";
 
@@ -143,7 +147,6 @@ public class KerberosAuthenticator implements Authenticator {
   }
   
   private URL url;
-  private HttpURLConnection conn;
   private Base64 base64;
   private ConnectionConfigurator connConfigurator;
 
@@ -160,9 +163,9 @@ public class KerberosAuthenticator implements Authenticator {
 
   /**
    * Performs SPNEGO authentication against the specified URL.
-   * <p/>
+   * <p>
    * If a token is given it does a NOP and returns the given token.
-   * <p/>
+   * <p>
    * If no token is given, it will perform the SPNEGO authentication sequence using an
    * HTTP <code>OPTIONS</code> request.
    *
@@ -178,20 +181,22 @@ public class KerberosAuthenticator implements Authenticator {
     if (!token.isSet()) {
       this.url = url;
       base64 = new Base64(0);
-      conn = (HttpURLConnection) url.openConnection();
-      if (connConfigurator != null) {
-        conn = connConfigurator.configure(conn);
-      }
+      HttpURLConnection conn = token.openConnection(url, connConfigurator);
       conn.setRequestMethod(AUTH_HTTP_METHOD);
       conn.connect();
       
+      boolean needFallback = false;
       if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
         LOG.debug("JDK performed authentication on our behalf.");
         // If the JDK already did the SPNEGO back-and-forth for
         // us, just pull out the token.
         AuthenticatedURL.extractToken(conn, token);
-        return;
-      } else if (isNegotiate()) {
+        if (isTokenKerberos(token)) {
+          return;
+        }
+        needFallback = true;
+      }
+      if (!needFallback && isNegotiate(conn)) {
         LOG.debug("Performing our own SPNEGO sequence.");
         doSpnegoSequence(token);
       } else {
@@ -209,7 +214,7 @@ public class KerberosAuthenticator implements Authenticator {
 
   /**
    * If the specified URL does not support SPNEGO authentication, a fallback {@link Authenticator} will be used.
-   * <p/>
+   * <p>
    * This implementation returns a {@link PseudoAuthenticator}.
    *
    * @return the fallback {@link Authenticator}.
@@ -223,9 +228,24 @@ public class KerberosAuthenticator implements Authenticator {
   }
 
   /*
+   * Check if the passed token is of type "kerberos" or "kerberos-dt"
+   */
+  private boolean isTokenKerberos(AuthenticatedURL.Token token)
+      throws AuthenticationException {
+    if (token.isSet()) {
+      AuthToken aToken = AuthToken.parse(token.toString());          
+      if (aToken.getType().equals("kerberos") ||
+          aToken.getType().equals("kerberos-dt")) {              
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /*
   * Indicates if the response is starting a SPNEGO negotiation.
   */
-  private boolean isNegotiate() throws IOException {
+  private boolean isNegotiate(HttpURLConnection conn) throws IOException {
     boolean negotiate = false;
     if (conn.getResponseCode() == HttpURLConnection.HTTP_UNAUTHORIZED) {
       String authHeader = conn.getHeaderField(WWW_AUTHENTICATE);
@@ -243,11 +263,14 @@ public class KerberosAuthenticator implements Authenticator {
    * @throws IOException if an IO error occurred.
    * @throws AuthenticationException if an authentication error occurred.
    */
-  private void doSpnegoSequence(AuthenticatedURL.Token token) throws IOException, AuthenticationException {
+  private void doSpnegoSequence(final AuthenticatedURL.Token token)
+      throws IOException, AuthenticationException {
     try {
       AccessControlContext context = AccessController.getContext();
       Subject subject = Subject.getSubject(context);
-      if (subject == null) {
+      if (subject == null
+          || (!KerberosUtil.hasKerberosKeyTab(subject)
+              && !KerberosUtil.hasKerberosTicket(subject))) {
         LOG.debug("No subject in context, logging in");
         subject = new Subject();
         LoginContext login = new LoginContext("", subject,
@@ -267,10 +290,10 @@ public class KerberosAuthenticator implements Authenticator {
             GSSManager gssManager = GSSManager.getInstance();
             String servicePrincipal = KerberosUtil.getServicePrincipal("HTTP",
                 KerberosAuthenticator.this.url.getHost());
-            Oid oid = KerberosUtil.getOidInstance("NT_GSS_KRB5_PRINCIPAL");
+            Oid oid = KerberosUtil.NT_GSS_KRB5_PRINCIPAL_OID;
             GSSName serviceName = gssManager.createName(servicePrincipal,
                                                         oid);
-            oid = KerberosUtil.getOidInstance("GSS_KRB5_MECH_OID");
+            oid = KerberosUtil.GSS_KRB5_MECH_OID;
             gssContext = gssManager.createContext(serviceName, oid, null,
                                                   GSSContext.DEFAULT_LIFETIME);
             gssContext.requestCredDeleg(true);
@@ -282,13 +305,15 @@ public class KerberosAuthenticator implements Authenticator {
 
             // Loop while the context is still not established
             while (!established) {
+              HttpURLConnection conn =
+                  token.openConnection(url, connConfigurator);
               outToken = gssContext.initSecContext(inToken, 0, inToken.length);
               if (outToken != null) {
-                sendToken(outToken);
+                sendToken(conn, outToken);
               }
 
               if (!gssContext.isEstablished()) {
-                inToken = readToken();
+                inToken = readToken(conn);
               } else {
                 established = true;
               }
@@ -303,22 +328,22 @@ public class KerberosAuthenticator implements Authenticator {
         }
       });
     } catch (PrivilegedActionException ex) {
-      throw new AuthenticationException(ex.getException());
+      if (ex.getException() instanceof IOException) {
+        throw (IOException) ex.getException();
+      } else {
+        throw new AuthenticationException(ex.getException());
+      }
     } catch (LoginException ex) {
       throw new AuthenticationException(ex);
     }
-    AuthenticatedURL.extractToken(conn, token);
   }
 
   /*
   * Sends the Kerberos token to the server.
   */
-  private void sendToken(byte[] outToken) throws IOException {
+  private void sendToken(HttpURLConnection conn, byte[] outToken)
+      throws IOException {
     String token = base64.encodeToString(outToken);
-    conn = (HttpURLConnection) url.openConnection();
-    if (connConfigurator != null) {
-      conn = connConfigurator.configure(conn);
-    }
     conn.setRequestMethod(AUTH_HTTP_METHOD);
     conn.setRequestProperty(AUTHORIZATION, NEGOTIATE + " " + token);
     conn.connect();
@@ -327,7 +352,8 @@ public class KerberosAuthenticator implements Authenticator {
   /*
   * Retrieves the Kerberos token returned by the server.
   */
-  private byte[] readToken() throws IOException, AuthenticationException {
+  private byte[] readToken(HttpURLConnection conn)
+      throws IOException, AuthenticationException {
     int status = conn.getResponseCode();
     if (status == HttpURLConnection.HTTP_OK || status == HttpURLConnection.HTTP_UNAUTHORIZED) {
       String authHeader = conn.getHeaderField(WWW_AUTHENTICATE);

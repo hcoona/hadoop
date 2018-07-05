@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.metrics2.lib;
 
+import org.junit.Ignore;
 import org.junit.Test;
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
@@ -41,19 +42,61 @@ public class TestMetricsRegistry {
     r.newCounter("c2", "c2 desc", 2L);
     r.newGauge("g1", "g1 desc", 3);
     r.newGauge("g2", "g2 desc", 4L);
+    r.newGauge("g3", "g3 desc", 5f);
     r.newStat("s1", "s1 desc", "ops", "time");
 
-    assertEquals("num metrics in registry", 5, r.metrics().size());
+    assertEquals("num metrics in registry", 6, r.metrics().size());
     assertTrue("c1 found", r.get("c1") instanceof MutableCounterInt);
     assertTrue("c2 found", r.get("c2") instanceof MutableCounterLong);
     assertTrue("g1 found", r.get("g1") instanceof MutableGaugeInt);
     assertTrue("g2 found", r.get("g2") instanceof MutableGaugeLong);
+    assertTrue("g3 found", r.get("g3") instanceof MutableGaugeFloat);
     assertTrue("s1 found", r.get("s1") instanceof MutableStat);
 
     expectMetricsException("Metric name c1 already exists", new Runnable() {
       @Override
       public void run() { r.newCounter("c1", "test dup", 0); }
     });
+  }
+
+  /**
+   * Test adding metrics with whitespace in the name
+   */
+  @Test
+  public void testMetricsRegistryIllegalMetricNames() {
+    final MetricsRegistry r = new MetricsRegistry("test");
+    // Fill up with some basics
+    r.newCounter("c1", "c1 desc", 1);
+    r.newGauge("g1", "g1 desc", 1);
+    r.newQuantiles("q1", "q1 desc", "q1 name", "q1 val type", 1);
+    // Add some illegal names
+    expectMetricsException("Metric name 'badcount 2' contains "+
+        "illegal whitespace character", new Runnable() {
+      @Override
+      public void run() { r.newCounter("badcount 2", "c2 desc", 2); }
+    });
+    expectMetricsException("Metric name 'badcount3  ' contains "+
+        "illegal whitespace character", new Runnable() {
+      @Override
+      public void run() { r.newCounter("badcount3  ", "c3 desc", 3); }
+    });
+    expectMetricsException("Metric name '  badcount4' contains "+
+        "illegal whitespace character", new Runnable() {
+      @Override
+      public void run() { r.newCounter("  badcount4", "c4 desc", 4); }
+    });
+    expectMetricsException("Metric name 'withtab5	' contains "+
+        "illegal whitespace character", new Runnable() {
+      @Override
+      public void run() { r.newCounter("withtab5	", "c5 desc", 5); }
+    });
+    expectMetricsException("Metric name 'withnewline6\n' contains "+
+        "illegal whitespace character", new Runnable() {
+      @Override
+      public void run() { r.newCounter("withnewline6\n", "c6 desc", 6); }
+    });
+    // Final validation
+    assertEquals("num metrics in registry", 3, r.metrics().size());
   }
 
   /**
@@ -81,6 +124,23 @@ public class TestMetricsRegistry {
     });
   }
 
+  /**
+   * Test adding illegal parameters
+   */
+  @Test
+  public void testAddIllegalParameters() {
+    final MetricsRegistry r = new MetricsRegistry("IllegalParamTest");
+
+    expectMetricsException("Interval should be positive.  Value passed is: -20",
+        new Runnable() {
+      @Override
+      public void run() {
+          r.newQuantiles("q1", "New Quantile 1", "qq1", "qv1", (int)-20);
+      }
+    });
+  }
+
+  @Ignore
   private void expectMetricsException(String prefix, Runnable fun) {
     try {
       fun.run();

@@ -18,9 +18,11 @@
 package org.apache.hadoop.crypto.key.kms;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -240,6 +242,22 @@ public class ValueQueue <E> {
   }
 
   /**
+   * Get size of the Queue for keyName. This is only used in unit tests.
+   * @param keyName the key name
+   * @return int queue size
+   */
+  public int getSize(String keyName) {
+    // We can't do keyQueues.get(keyName).size() here,
+    // since that will have the side effect of populating the cache.
+    Map<String, LinkedBlockingQueue<E>> map =
+        keyQueues.getAllPresent(Arrays.asList(keyName));
+    if (map.get(keyName) == null) {
+      return 0;
+    }
+    return map.get(keyName).size();
+  }
+
+  /**
    * This removes the "num" values currently at the head of the Queue for the
    * provided key. Will immediately fire the Queue filler function if key
    * does not exist
@@ -289,7 +307,7 @@ public class ValueQueue <E> {
         ekvs.add(val);
       }
     } catch (Exception e) {
-      throw new IOException("Exeption while contacting value generator ", e);
+      throw new IOException("Exception while contacting value generator ", e);
     }
     return ekvs;
   }
@@ -298,11 +316,13 @@ public class ValueQueue <E> {
       final Queue<E> keyQueue) throws InterruptedException {
     if (!executorThreadsStarted) {
       synchronized (this) {
-        // To ensure all requests are first queued, make coreThreads =
-        // maxThreads
-        // and pre-start all the Core Threads.
-        executor.prestartAllCoreThreads();
-        executorThreadsStarted = true;
+        if (!executorThreadsStarted) {
+          // To ensure all requests are first queued, make coreThreads =
+          // maxThreads
+          // and pre-start all the Core Threads.
+          executor.prestartAllCoreThreads();
+          executorThreadsStarted = true;
+        }
       }
     }
     // The submit/execute method of the ThreadPoolExecutor is bypassed and

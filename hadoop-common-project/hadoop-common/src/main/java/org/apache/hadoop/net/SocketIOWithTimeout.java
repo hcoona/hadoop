@@ -31,9 +31,9 @@ import java.nio.channels.spi.SelectorProvider;
 import java.util.Iterator;
 import java.util.LinkedList;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.util.Time;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This supports input and output streams for a socket channels. 
@@ -42,7 +42,7 @@ import org.apache.hadoop.util.Time;
 abstract class SocketIOWithTimeout {
   // This is intentionally package private.
 
-  static final Log LOG = LogFactory.getLog(SocketIOWithTimeout.class);    
+  static final Logger LOG = LoggerFactory.getLogger(SocketIOWithTimeout.class);
   
   private SelectableChannel channel;
   private long timeout;
@@ -338,6 +338,12 @@ abstract class SocketIOWithTimeout {
             return ret;
           }
           
+          if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedIOException("Interrupted while waiting for "
+                + "IO on channel " + channel + ". " + timeout
+                + " millis timeout left.");
+          }
+
           /* Sometimes select() returns 0 much before timeout for 
            * unknown reasons. So select again if required.
            */
@@ -348,12 +354,6 @@ abstract class SocketIOWithTimeout {
             }
           }
           
-          if (Thread.currentThread().isInterrupted()) {
-            throw new InterruptedIOException("Interruped while waiting for " +
-                                             "IO on channel " + channel +
-                                             ". " + timeout + 
-                                             " millis timeout left.");
-          }
         }
       } finally {
         if (key != null) {

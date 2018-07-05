@@ -86,34 +86,42 @@ class AclCommands extends FsCommand {
           (perm.getOtherAction().implies(FsAction.EXECUTE) ? "t" : "T"));
       }
 
-      List<AclEntry> entries = perm.getAclBit() ?
-        item.fs.getAclStatus(item.path).getEntries() :
-        Collections.<AclEntry>emptyList();
+      AclStatus aclStatus = null;
+      List<AclEntry> entries = null;
+      if (perm.getAclBit()) {
+        aclStatus = item.fs.getAclStatus(item.path);
+        entries = aclStatus.getEntries();
+      } else {
+        aclStatus = null;
+        entries = Collections.<AclEntry> emptyList();
+      }
       ScopedAclEntries scopedEntries = new ScopedAclEntries(
         AclUtil.getAclFromPermAndEntries(perm, entries));
-      printAclEntriesForSingleScope(scopedEntries.getAccessEntries());
-      printAclEntriesForSingleScope(scopedEntries.getDefaultEntries());
+      printAclEntriesForSingleScope(aclStatus, perm,
+          scopedEntries.getAccessEntries());
+      printAclEntriesForSingleScope(aclStatus, perm,
+          scopedEntries.getDefaultEntries());
       out.println();
     }
 
     /**
      * Prints all the ACL entries in a single scope.
-     *
+     * @param aclStatus AclStatus for the path
+     * @param fsPerm FsPermission for the path
      * @param entries List<AclEntry> containing ACL entries of file
      */
-    private void printAclEntriesForSingleScope(List<AclEntry> entries) {
+    private void printAclEntriesForSingleScope(AclStatus aclStatus,
+        FsPermission fsPerm, List<AclEntry> entries) {
       if (entries.isEmpty()) {
         return;
       }
       if (AclUtil.isMinimalAcl(entries)) {
         for (AclEntry entry: entries) {
-          out.println(entry);
+          out.println(entry.toStringStable());
         }
       } else {
-        // ACL sort order guarantees mask is the second-to-last entry.
-        FsAction maskPerm = entries.get(entries.size() - 2).getPermission();
         for (AclEntry entry: entries) {
-          printExtendedAclEntry(entry, maskPerm);
+          printExtendedAclEntry(aclStatus, fsPerm, entry);
         }
       }
     }
@@ -123,22 +131,24 @@ class AclCommands extends FsCommand {
      * permissions of the entry, then also prints the restricted version as the
      * effective permissions.  The mask applies to all named entries and also
      * the unnamed group entry.
-     *
+     * @param aclStatus AclStatus for the path
+     * @param fsPerm FsPermission for the path
      * @param entry AclEntry extended ACL entry to print
-     * @param maskPerm FsAction permissions in the ACL's mask entry
      */
-    private void printExtendedAclEntry(AclEntry entry, FsAction maskPerm) {
+    private void printExtendedAclEntry(AclStatus aclStatus,
+        FsPermission fsPerm, AclEntry entry) {
       if (entry.getName() != null || entry.getType() == AclEntryType.GROUP) {
         FsAction entryPerm = entry.getPermission();
-        FsAction effectivePerm = entryPerm.and(maskPerm);
+        FsAction effectivePerm = aclStatus
+            .getEffectivePermission(entry, fsPerm);
         if (entryPerm != effectivePerm) {
           out.println(String.format("%s\t#effective:%s", entry,
             effectivePerm.SYMBOL));
         } else {
-          out.println(entry);
+          out.println(entry.toStringStable());
         }
       } else {
-        out.println(entry);
+        out.println(entry.toStringStable());
       }
     }
   }
@@ -182,6 +192,9 @@ class AclCommands extends FsCommand {
       boolean oneRemoveOption = cf.getOpt("b") || cf.getOpt("k");
       boolean oneModifyOption = cf.getOpt("m") || cf.getOpt("x");
       boolean setOption = cf.getOpt("-set");
+      boolean hasExpectedOptions = cf.getOpt("b") || cf.getOpt("k") ||
+          cf.getOpt("m") || cf.getOpt("x") || cf.getOpt("-set");
+
       if ((bothRemoveOptions || bothModifyOptions)
           || (oneRemoveOption && oneModifyOption)
           || (setOption && (oneRemoveOption || oneModifyOption))) {
@@ -191,10 +204,19 @@ class AclCommands extends FsCommand {
 
       // Only -m, -x and --set expects <acl_spec>
       if (oneModifyOption || setOption) {
+        if (args.isEmpty()) {
+          throw new HadoopIllegalArgumentException(
+              "Missing arguments: <acl_spec> <path>");
+        }
         if (args.size() < 2) {
-          throw new HadoopIllegalArgumentException("<acl_spec> is missing");
+          throw new HadoopIllegalArgumentException(
+              "Missing either <acl_spec> or <path>");
         }
         aclEntries = AclEntry.parseAclSpec(args.removeFirst(), !cf.getOpt("x"));
+        if (aclEntries.isEmpty()) {
+          throw new HadoopIllegalArgumentException(
+              "Missing <acl_spec> entry");
+        }
       }
 
       if (args.isEmpty()) {
@@ -204,6 +226,10 @@ class AclCommands extends FsCommand {
         throw new HadoopIllegalArgumentException("Too many arguments");
       }
 
+      if (!hasExpectedOptions) {
+        throw new HadoopIllegalArgumentException(
+            "Expected one of -b, -k, -m, -x or --set options");
+      }
       // In recursive mode, save a separate list of just the access ACL entries.
       // Only directories may have a default ACL.  When a recursive operation
       // encounters a file under the specified path, it must pass only the

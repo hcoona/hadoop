@@ -26,8 +26,6 @@ import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
@@ -35,6 +33,8 @@ import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathNotFoundException;
 import org.apache.hadoop.util.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * An abstract class for the execution of a file system command
@@ -58,12 +58,14 @@ abstract public class Command extends Configured {
   private int depth = 0;
   protected ArrayList<Exception> exceptions = new ArrayList<Exception>();
 
-  private static final Log LOG = LogFactory.getLog(Command.class);
+  private static final Logger LOG = LoggerFactory.getLogger(Command.class);
 
   /** allows stdout to be captured if necessary */
   public PrintStream out = System.out;
   /** allows stderr to be captured if necessary */
   public PrintStream err = System.err;
+  /** allows the command factory to be used if necessary */
+  private CommandFactory commandFactory = null;
 
   /** Constructor */
   protected Command() {
@@ -98,7 +100,17 @@ abstract public class Command extends Configured {
    * @throws IOException if any error occurs
    */
   abstract protected void run(Path path) throws IOException;
-  
+
+  /**
+   * Execute the command on the input path data. Commands can override to make
+   * use of the resolved filesystem.
+   * @param pathData The input path with resolved filesystem
+   * @throws IOException
+   */
+  protected void run(PathData pathData) throws IOException {
+    run(pathData.path);
+  }
+
   /** 
    * For each source path, execute the command
    * 
@@ -110,7 +122,7 @@ abstract public class Command extends Configured {
       try {
         PathData[] srcs = PathData.expandAsGlob(src, getConf());
         for (PathData s : srcs) {
-          run(s.path);
+          run(s);
         }
       } catch (IOException e) {
         exitCode = -1;
@@ -118,6 +130,15 @@ abstract public class Command extends Configured {
       }
     }
     return exitCode;
+  }
+
+  /** sets the command factory for later use */
+  public void setCommandFactory(CommandFactory factory) {
+    this.commandFactory = factory;
+  }
+  /** retrieves the command factory */
+  protected CommandFactory getCommandFactory() {
+    return this.commandFactory;
   }
 
   /**
@@ -304,7 +325,7 @@ abstract public class Command extends Configured {
     for (PathData item : items) {
       try {
         processPath(item);
-        if (recursive && item.stat.isDirectory()) {
+        if (recursive && isPathRecursable(item)) {
           recursePath(item);
         }
         postProcessPath(item);
@@ -312,6 +333,21 @@ abstract public class Command extends Configured {
         displayError(e);
       }
     }
+  }
+
+  /**
+   * Determines whether a {@link PathData} item is recursable. Default
+   * implementation is to recurse directories but can be overridden to recurse
+   * through symbolic links.
+   *
+   * @param item
+   *          a {@link PathData} object
+   * @return true if the item is recursable, false otherwise
+   * @throws IOException
+   *           if anything goes wrong in the user-implementation
+   */
+  protected boolean isPathRecursable(PathData item) throws IOException {
+    return item.stat.isDirectory();
   }
 
   /**

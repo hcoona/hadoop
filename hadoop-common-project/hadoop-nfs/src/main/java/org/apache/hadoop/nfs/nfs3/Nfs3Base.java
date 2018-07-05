@@ -17,23 +17,22 @@
  */
 package org.apache.hadoop.nfs.nfs3;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.oncrpc.RpcProgram;
 import org.apache.hadoop.oncrpc.SimpleTcpServer;
 import org.apache.hadoop.portmap.PortmapMapping;
 import org.apache.hadoop.util.ShutdownHookManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static org.apache.hadoop.util.ExitUtil.terminate;
 
 /**
  * Nfs server. Supports NFS v3 using {@link RpcProgram}.
- * Currently Mountd program is also started inside this class.
  * Only TCP server is supported and UDP is not supported.
  */
 public abstract class Nfs3Base {
-  public static final Log LOG = LogFactory.getLog(Nfs3Base.class);
+  public static final Logger LOG = LoggerFactory.getLogger(Nfs3Base.class);
   private final RpcProgram rpcProgram;
   private int nfsBoundPort; // Will set after server starts
 
@@ -55,7 +54,7 @@ public abstract class Nfs3Base {
       try {
         rpcProgram.register(PortmapMapping.TRANSPORT_TCP, nfsBoundPort);
       } catch (Throwable e) {
-        LOG.fatal("Failed to start the server. Cause:", e);
+        LOG.error("Failed to register the NFSv3 service.", e);
         terminate(1, e);
       }
     }
@@ -65,7 +64,17 @@ public abstract class Nfs3Base {
     SimpleTcpServer tcpServer = new SimpleTcpServer(rpcProgram.getPort(),
         rpcProgram, 0);
     rpcProgram.startDaemons();
-    tcpServer.run();
+    try {
+      tcpServer.run();
+    } catch (Throwable e) {
+      LOG.error("Failed to start the TCP server.", e);
+      if (tcpServer.getBoundPort() > 0) {
+        rpcProgram.unregister(PortmapMapping.TRANSPORT_TCP,
+            tcpServer.getBoundPort());
+      }
+      tcpServer.shutdown();
+      terminate(1, e);
+    }
     nfsBoundPort = tcpServer.getBoundPort();
   }
 

@@ -27,6 +27,7 @@ import java.lang.management.GarbageCollectorMXBean;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.log.metrics.EventCounter;
 import org.apache.hadoop.metrics2.MetricsCollector;
@@ -57,9 +58,24 @@ public class JvmMetrics implements MetricsSource {
       }
       return impl;
     }
+
+    synchronized void shutdown() {
+      DefaultMetricsSystem.instance().unregisterSource(JvmMetrics.name());
+      impl = null;
+    }
+  }
+
+  @VisibleForTesting
+  public synchronized void registerIfNeeded(){
+    // during tests impl might exist, but is not registered
+    MetricsSystem ms = DefaultMetricsSystem.instance();
+    if (ms.getSource("JvmMetrics") == null) {
+      ms.register(JvmMetrics.name(), JvmMetrics.description(), this);
+    }
   }
 
   static final float M = 1024*1024;
+  static public final float MEMORY_MAX_UNLIMITED_MB = -1;
 
   final MemoryMXBean memoryMXBean = ManagementFactory.getMemoryMXBean();
   final List<GarbageCollectorMXBean> gcBeans =
@@ -70,6 +86,7 @@ public class JvmMetrics implements MetricsSource {
   final ConcurrentHashMap<String, MetricsInfo[]> gcInfoCache =
       new ConcurrentHashMap<String, MetricsInfo[]>();
 
+  @VisibleForTesting
   JvmMetrics(String processName, String sessionId) {
     this.processName = processName;
     this.sessionId = sessionId;
@@ -85,8 +102,22 @@ public class JvmMetrics implements MetricsSource {
                        new JvmMetrics(processName, sessionId));
   }
 
+  public static void reattach(MetricsSystem ms, JvmMetrics jvmMetrics) {
+    ms.register(JvmMetrics.name(), JvmMetrics.description(), jvmMetrics);
+  }
+
   public static JvmMetrics initSingleton(String processName, String sessionId) {
     return Singleton.INSTANCE.init(processName, sessionId);
+  }
+
+  /**
+   * Shutdown the JvmMetrics singleton. This is not necessary if the JVM itself
+   * is shutdown, but may be necessary for scenarios where JvmMetrics instance
+   * needs to be re-created while the JVM is still around. One such scenario
+   * is unit-testing.
+   */
+  public static void shutdownSingleton() {
+    Singleton.INSTANCE.shutdown();
   }
 
   @Override
@@ -106,11 +137,21 @@ public class JvmMetrics implements MetricsSource {
     Runtime runtime = Runtime.getRuntime();
     rb.addGauge(MemNonHeapUsedM, memNonHeap.getUsed() / M)
       .addGauge(MemNonHeapCommittedM, memNonHeap.getCommitted() / M)
-      .addGauge(MemNonHeapMaxM, memNonHeap.getMax() / M)
+      .addGauge(MemNonHeapMaxM, calculateMaxMemoryUsage(memNonHeap))
       .addGauge(MemHeapUsedM, memHeap.getUsed() / M)
       .addGauge(MemHeapCommittedM, memHeap.getCommitted() / M)
-      .addGauge(MemHeapMaxM, memHeap.getMax() / M)
+      .addGauge(MemHeapMaxM, calculateMaxMemoryUsage(memHeap))
       .addGauge(MemMaxM, runtime.maxMemory() / M);
+  }
+
+  private float calculateMaxMemoryUsage(MemoryUsage memHeap) {
+    long max =  memHeap.getMax() ;
+
+     if (max == -1) {
+       return MEMORY_MAX_UNLIMITED_MB;
+     }
+
+    return max / M;
   }
 
   private void getGcUsage(MetricsRecordBuilder rb) {
@@ -129,7 +170,7 @@ public class JvmMetrics implements MetricsSource {
     
     if (pauseMonitor != null) {
       rb.addCounter(GcNumWarnThresholdExceeded,
-          pauseMonitor.getNumGcWarnThreadholdExceeded());
+          pauseMonitor.getNumGcWarnThresholdExceeded());
       rb.addCounter(GcNumInfoThresholdExceeded,
           pauseMonitor.getNumGcInfoThresholdExceeded());
       rb.addCounter(GcTotalExtraSleepTime,

@@ -85,6 +85,18 @@ then
 	      HADOOP_CONF_DIR=$confdir
     fi
 fi
+
+# Set log level. Default to INFO.
+if [ $# -gt 1 ]
+then
+  if [ "--loglevel" = "$1" ]
+  then
+    shift
+    HADOOP_LOGLEVEL=$1
+    shift
+  fi
+fi
+HADOOP_LOGLEVEL="${HADOOP_LOGLEVEL:-INFO}"
  
 # Allow alternate conf dir location.
 if [ -e "${HADOOP_PREFIX}/conf/hadoop-env.sh" ]; then
@@ -132,6 +144,11 @@ fi
 if [ -f "${HADOOP_CONF_DIR}/hadoop-env.sh" ]; then
   . "${HADOOP_CONF_DIR}/hadoop-env.sh"
 fi
+
+cygwin=false
+case "$(uname)" in
+CYGWIN*) cygwin=true;;
+esac
 
 # check if net.ipv6.bindv6only is set to 1
 bindv6only=$(/sbin/sysctl -n net.ipv6.bindv6only 2> /dev/null)
@@ -233,10 +250,20 @@ TOOL_PATH="${TOOL_PATH:-$HADOOP_PREFIX/share/hadoop/tools/lib/*}"
 
 HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.log.dir=$HADOOP_LOG_DIR"
 HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.log.file=$HADOOP_LOGFILE"
-HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.home.dir=$HADOOP_PREFIX"
+
+if [ "$cygwin" = true ]; then
+  HADOOP_HOME=$(cygpath -w "$HADOOP_PREFIX" 2>/dev/null)
+  HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.home.dir=$HADOOP_HOME"
+  export HADOOP_HOME
+else
+  HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.home.dir=$HADOOP_PREFIX"
+fi
 HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.id.str=$HADOOP_IDENT_STRING"
-HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.root.logger=${HADOOP_ROOT_LOGGER:-INFO,console}"
+HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.root.logger=${HADOOP_ROOT_LOGGER:-${HADOOP_LOGLEVEL},console}"
 if [ "x$JAVA_LIBRARY_PATH" != "x" ]; then
+  if [ "$cygwin" = true ]; then
+    JAVA_LIBRARY_PATH=$(cygpath -w "$JAVA_LIBRARY_PATH" 2>/dev/null)
+  fi
   HADOOP_OPTS="$HADOOP_OPTS -Djava.library.path=$JAVA_LIBRARY_PATH"
   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$JAVA_LIBRARY_PATH
 fi  

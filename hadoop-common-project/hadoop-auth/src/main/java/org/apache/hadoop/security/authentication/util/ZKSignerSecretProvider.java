@@ -15,6 +15,8 @@ package org.apache.hadoop.security.authentication.util;
 
 import com.google.common.annotations.VisibleForTesting;
 import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.security.SecureRandom;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -44,7 +46,7 @@ import org.slf4j.LoggerFactory;
 /**
  * A SignerSecretProvider that synchronizes a rolling random secret between
  * multiple servers using ZooKeeper.
- * <p/>
+ * <p>
  * It works by storing the secrets and next rollover time in a ZooKeeper znode.
  * All ZKSignerSecretProviders looking at that znode will use those
  * secrets and next rollover time to ensure they are synchronized.  There is no
@@ -55,33 +57,8 @@ import org.slf4j.LoggerFactory;
  * your own Curator client, you can pass it to ZKSignerSecretProvider; see
  * {@link org.apache.hadoop.security.authentication.server.AuthenticationFilter}
  * for more details.
- * <p/>
- * The supported configuration properties are:
- * <ul>
- * <li>signer.secret.provider.zookeeper.connection.string: indicates the
- * ZooKeeper connection string to connect with.</li>
- * <li>signer.secret.provider.zookeeper.path: indicates the ZooKeeper path
- * to use for storing and retrieving the secrets.  All ZKSignerSecretProviders
- * that need to coordinate should point to the same path.</li>
- * <li>signer.secret.provider.zookeeper.auth.type: indicates the auth type to
- * use.  Supported values are "none" and "sasl".  The default value is "none"
- * </li>
- * <li>signer.secret.provider.zookeeper.kerberos.keytab: set this to the path
- * with the Kerberos keytab file.  This is only required if using Kerberos.</li>
- * <li>signer.secret.provider.zookeeper.kerberos.principal: set this to the
- * Kerberos principal to use.  This only required if using Kerberos.</li>
- * <li>signer.secret.provider.zookeeper.disconnect.on.close: when set to "true",
- * ZKSignerSecretProvider will close the ZooKeeper connection on shutdown.  The
- * default is "true". Only set this to "false" if a custom Curator client is
- * being provided and the disconnection is being handled elsewhere.</li>
- * </ul>
- *
- * The following attribute in the ServletContext can also be set if desired:
- * <li>signer.secret.provider.zookeeper.curator.client: A CuratorFramework
- * client object can be passed here. If given, the "zookeeper" implementation
- * will use this Curator client instead of creating its own, which is useful if
- * you already have a Curator client or want more control over its
- * configuration.</li>
+ * <p>
+ * Details of the configurations are listed on <a href="../../../../../../../Configuration.html">Configuration Page</a>
  */
 @InterfaceStability.Unstable
 @InterfaceAudience.Private
@@ -173,7 +150,7 @@ public class ZKSignerSecretProvider extends RolloverSignerSecretProvider {
 
   public ZKSignerSecretProvider() {
     super();
-    rand = new Random();
+    rand = new SecureRandom();
   }
 
   /**
@@ -282,7 +259,7 @@ public class ZKSignerSecretProvider extends RolloverSignerSecretProvider {
     } catch (KeeperException.BadVersionException bve) {
       LOG.debug("Unable to push to znode; another server already did it");
     } catch (Exception ex) {
-      LOG.error("An unexpected exception occured pushing data to ZooKeeper",
+      LOG.error("An unexpected exception occurred pushing data to ZooKeeper",
               ex);
     }
   }
@@ -366,15 +343,18 @@ public class ZKSignerSecretProvider extends RolloverSignerSecretProvider {
     }
   }
 
-  private byte[] generateRandomSecret() {
-    return Long.toString(rand.nextLong()).getBytes();
+  @VisibleForTesting
+  protected byte[] generateRandomSecret() {
+    byte[] secret = new byte[32]; // 32 bytes = 256 bits
+    rand.nextBytes(secret);
+    return secret;
   }
 
   /**
    * This method creates the Curator client and connects to ZooKeeper.
    * @param config configuration properties
    * @return A Curator client
-   * @throws java.lang.Exception
+   * @throws Exception thrown if an error occurred
    */
   protected CuratorFramework createCuratorClient(Properties config)
           throws Exception {
@@ -460,6 +440,8 @@ public class ZKSignerSecretProvider extends RolloverSignerSecretProvider {
   @InterfaceAudience.Private
   public static class JaasConfiguration extends Configuration {
 
+    private final javax.security.auth.login.Configuration baseConfig =
+        javax.security.auth.login.Configuration.getConfiguration();
     private static AppConfigurationEntry[] entry;
     private String entryName;
 
@@ -492,7 +474,8 @@ public class ZKSignerSecretProvider extends RolloverSignerSecretProvider {
 
     @Override
     public AppConfigurationEntry[] getAppConfigurationEntry(String name) {
-      return (entryName.equals(name)) ? entry : null;
+      return (entryName.equals(name)) ? entry : ((baseConfig != null)
+        ? baseConfig.getAppConfigurationEntry(name) : null);
     }
 
     private String getKrb5LoginModuleName() {

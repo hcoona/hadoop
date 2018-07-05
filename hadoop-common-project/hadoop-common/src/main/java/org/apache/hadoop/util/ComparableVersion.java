@@ -1,19 +1,3 @@
-// Code source of this file: 
-//   http://grepcode.com/file/repo1.maven.org/maven2/
-//     org.apache.maven/maven-artifact/3.1.1/
-//       org/apache/maven/artifact/versioning/ComparableVersion.java/
-//
-// Modifications made on top of the source:
-//   1. Changed
-//        package org.apache.maven.artifact.versioning;
-//      to
-//        package org.apache.hadoop.util;
-//   2. Removed author tags to clear hadoop author tag warning
-//        author <a href="mailto:kenney@apache.org">Kenney Westerhof</a>
-//        author <a href="mailto:hboutemy@apache.org">Hervé Boutemy</a>
-//
-package org.apache.hadoop.util;
-
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -33,13 +17,27 @@ package org.apache.hadoop.util;
  * under the License.
  */
 
+// Code source of this file:
+//   http://grepcode.com/file/repo1.maven.org/maven2/
+//     org.apache.maven/maven-artifact/3.1.1/
+//       org/apache/maven/artifact/versioning/ComparableVersion.java/
+//
+// Modifications made on top of the source:
+//   1. Changed
+//        package org.apache.maven.artifact.versioning;
+//      to
+//        package org.apache.hadoop.util;
+//   2. Removed author tags to clear hadoop author tag warning
+//
+package org.apache.hadoop.util;
+
+
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
-import java.util.Locale;
 import java.util.Properties;
 import java.util.Stack;
 
@@ -194,6 +192,8 @@ public class ComparableVersion
                         break;
                     case 'm':
                         value = "milestone";
+                        break;
+                    default:
                         break;
                 }
             }
@@ -363,7 +363,7 @@ public class ComparableVersion
 
         items = new ListItem();
 
-        version = version.toLowerCase( Locale.ENGLISH );
+        version = StringUtils.toLowerCase(version);
 
         ListItem list = items;
 

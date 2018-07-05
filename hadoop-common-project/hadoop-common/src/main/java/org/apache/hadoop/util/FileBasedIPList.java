@@ -17,36 +17,46 @@
  */
 package org.apache.hadoop.util;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-
 /**
- * FileBasedIPList loads a list of subnets in CIDR format and ip addresses from a file.
+ * FileBasedIPList loads a list of subnets in CIDR format and ip addresses from
+ * a file.
  *
- * Given an ip address, isIn  method returns true if ip belongs to one of the subnets.
+ * Given an ip address, isIn  method returns true if ip belongs to one of the
+ * subnets.
  *
  * Thread safe.
  */
-
 public class FileBasedIPList implements IPList {
 
-  private static final Log LOG = LogFactory.getLog(FileBasedIPList.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(FileBasedIPList.class);
 
   private final String fileName;
   private final MachineList addressList;
 
   public FileBasedIPList(String fileName) {
     this.fileName = fileName;
-    String[] lines = readLines(fileName);
+    String[] lines;
+    try {
+      lines = readLines(fileName);
+    } catch (IOException e) {
+      lines = null;
+    }
     if (lines != null) {
       addressList = new MachineList(new HashSet<String>(Arrays.asList(lines)));
     } else {
@@ -67,35 +77,39 @@ public class FileBasedIPList implements IPList {
   }
 
   /**
-   * reads the lines in a file.
+   * Reads the lines in a file.
    * @param fileName
    * @return lines in a String array; null if the file does not exist or if the
    * file name is null
    * @throws IOException
    */
-  private static String[] readLines(String fileName) {
+  private static String[] readLines(String fileName) throws IOException {
     try {
       if (fileName != null) {
         File file = new File (fileName);
         if (file.exists()) {
-          FileReader fileReader = new FileReader(file);
-          BufferedReader bufferedReader = new BufferedReader(fileReader);
-          List<String> lines = new ArrayList<String>();
-          String line = null;
-          while ((line = bufferedReader.readLine()) != null) {
-            lines.add(line);
+          try (
+              Reader fileReader = new InputStreamReader(
+                  new FileInputStream(file), StandardCharsets.UTF_8);
+              BufferedReader bufferedReader = new BufferedReader(fileReader)) {
+            List<String> lines = new ArrayList<String>();
+            String line = null;
+            while ((line = bufferedReader.readLine()) != null) {
+              lines.add(line);
+            }
+            if (LOG.isDebugEnabled()) {
+              LOG.debug("Loaded IP list of size = " + lines.size() +
+                  " from file = " + fileName);
+            }
+            return (lines.toArray(new String[lines.size()]));
           }
-          bufferedReader.close();
-          LOG.debug("Loaded IP list of size = " + lines.size() +" from file = " + fileName);
-          return(lines.toArray(new String[lines.size()]));
-        }
-        else {
+        } else {
           LOG.debug("Missing ip list file : "+ fileName);
         }
       }
-    }
-    catch (Throwable t) {
-      LOG.error(t);
+    } catch (IOException ioe) {
+      LOG.error(ioe.toString());
+      throw ioe;
     }
     return null;
   }

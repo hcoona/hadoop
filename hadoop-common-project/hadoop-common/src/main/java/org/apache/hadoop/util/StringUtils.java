@@ -25,7 +25,6 @@ import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -444,20 +443,6 @@ public class StringUtils {
     }
 
     return str.trim().split("\\s*[,\n]\\s*");
-  }
-
-  /**
-   * Trims all the strings in a Collection<String> and returns a Set<String>.
-   * @param strings
-   * @return
-   */
-  @Deprecated
-  public static Set<String> getTrimmedStrings(Collection<String> strings) {
-    Set<String> trimmedStrings = new HashSet<String>();
-    for (String string: strings) {
-      trimmedStrings.add(string.trim());
-    }
-    return trimmedStrings;
   }
 
   final public static String[] emptyStringArray = {};

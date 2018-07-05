@@ -41,11 +41,12 @@ import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.TokenInfo;
 import org.junit.Before;
 import org.junit.Test;
-import org.apache.hadoop.ipc.TestSaslRPC.TestTokenSecretManager;
-import org.apache.hadoop.ipc.TestSaslRPC.TestTokenIdentifier;
-import org.apache.hadoop.ipc.TestSaslRPC.TestTokenSelector;
-import org.apache.commons.logging.*;
+import org.apache.hadoop.ipc.TestRpcBase.TestTokenSecretManager;
+import org.apache.hadoop.ipc.TestRpcBase.TestTokenIdentifier;
+import org.apache.hadoop.ipc.TestRpcBase.TestTokenSelector;
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  *
@@ -63,8 +64,8 @@ public class TestDoAsEffectiveUser {
   private static final Configuration masterConf = new Configuration();
   
   
-  public static final Log LOG = LogFactory
-      .getLog(TestDoAsEffectiveUser.class);
+  public static final Logger LOG = LoggerFactory
+      .getLogger(TestDoAsEffectiveUser.class);
   
   
   static {

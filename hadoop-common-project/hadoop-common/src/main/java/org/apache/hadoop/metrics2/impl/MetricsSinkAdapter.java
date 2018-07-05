@@ -24,8 +24,6 @@ import java.util.concurrent.*;
 
 import static com.google.common.base.Preconditions.*;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.metrics2.lib.MutableGaugeInt;
 import org.apache.hadoop.metrics2.lib.MetricsRegistry;
@@ -36,13 +34,16 @@ import static org.apache.hadoop.metrics2.util.Contracts.*;
 import org.apache.hadoop.metrics2.MetricsFilter;
 import org.apache.hadoop.metrics2.MetricsSink;
 import org.apache.hadoop.util.Time;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * An adapter class for metrics sink and associated filters
  */
 class MetricsSinkAdapter implements SinkQueue.Consumer<MetricsBuffer> {
 
-  private final Log LOG = LogFactory.getLog(MetricsSinkAdapter.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(MetricsSinkAdapter.class);
   private final String name, description, context;
   private final MetricsSink sink;
   private final MetricsFilter sourceFilter, recordFilter, metricFilter;
@@ -95,7 +96,10 @@ class MetricsSinkAdapter implements SinkQueue.Consumer<MetricsBuffer> {
   boolean putMetrics(MetricsBuffer buffer, long logicalTime) {
     if (logicalTime % period == 0) {
       LOG.debug("enqueue, logicalTime="+ logicalTime);
-      if (queue.enqueue(buffer)) return true;
+      if (queue.enqueue(buffer)) {
+        refreshQueueSizeGauge();
+        return true;
+      }
       dropped.incr();
       return false;
     }
@@ -105,7 +109,9 @@ class MetricsSinkAdapter implements SinkQueue.Consumer<MetricsBuffer> {
   public boolean putMetricsImmediate(MetricsBuffer buffer) {
     WaitableMetricsBuffer waitableBuffer =
         new WaitableMetricsBuffer(buffer);
-    if (!queue.enqueue(waitableBuffer)) {
+    if (queue.enqueue(waitableBuffer)) {
+      refreshQueueSizeGauge();
+    } else {
       LOG.warn(name + " has a full queue and can't consume the given metrics.");
       dropped.incr();
       return false;
@@ -127,6 +133,7 @@ class MetricsSinkAdapter implements SinkQueue.Consumer<MetricsBuffer> {
     while (!stopping) {
       try {
         queue.consumeAll(this);
+        refreshQueueSizeGauge();
         retryDelay = firstRetryDelay;
         n = retryCount;
         inError = false;
@@ -154,10 +161,15 @@ class MetricsSinkAdapter implements SinkQueue.Consumer<MetricsBuffer> {
                       "suppressing further error messages", e);
           }
           queue.clear();
+          refreshQueueSizeGauge();
           inError = true; // Don't keep complaining ad infinitum
         }
       }
     }
+  }
+
+  private void refreshQueueSizeGauge() {
+    qsize.set(queue.size());
   }
 
   @Override
@@ -198,14 +210,14 @@ class MetricsSinkAdapter implements SinkQueue.Consumer<MetricsBuffer> {
   void stop() {
     stopping = true;
     sinkThread.interrupt();
+    if (sink instanceof Closeable) {
+      IOUtils.cleanupWithLogger(LOG, (Closeable)sink);
+    }
     try {
       sinkThread.join();
     }
     catch (InterruptedException e) {
       LOG.warn("Stop interrupted", e);
-    }
-    if (sink instanceof Closeable) {
-      IOUtils.cleanup(LOG, (Closeable)sink);
     }
   }
 
